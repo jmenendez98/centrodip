@@ -29,8 +29,8 @@ class calculate_matrices:
         self.high_conf_p = high_conf_p
         self.low_conf_p = low_conf_p
 
-        self.min_size = min_size # base pairs
-        self.merge_distance = merge_distance # base pairs
+        self.min_size = min_size # min size of annotation in CpG space
+        self.merge_distance = merge_distance # number of CpGs to merge across
 
         self.enrichment = enrichment
 
@@ -73,9 +73,9 @@ class calculate_matrices:
         mdrs = {"starts": [], "ends": [], "names": [], "scores": [], "strands": [], "itemRgbs": []}
         
         # helper function to add entries to the mdrs dictionary
-        def create_entry_helper(start, end, name, scores, color):
-            mdrs["starts"].append(start)
-            mdrs["ends"].append(end)
+        def create_entry_helper(start_idx, end_idx, name, scores, color):
+            mdrs["starts"].append(methyl_starts[start_idx])
+            mdrs["ends"].append(methyl_starts[end_idx] + 1)
             mdrs["names"].append(name)
             mdrs["scores"].append(np.median(scores))
             mdrs["strands"].append(".")
@@ -84,84 +84,49 @@ class calculate_matrices:
         # find potential MDR regions
         potential_mdr_idxs = np.where(mdr_conf > 0)[0]
         potential_mdr_diff = np.diff(potential_mdr_idxs)
-        potential_mdr_breaks = np.where(potential_mdr_diff != 1)[0] + 1 
+        potential_mdr_breaks = np.where(potential_mdr_diff > self.merge_distance)[0] + 1 
         potential_mdrs = np.split(potential_mdr_idxs, potential_mdr_breaks)
 
         temp_entries = []
         
         for mdr in potential_mdrs:
-            if len(mdr) == 0:
+            if len(mdr) < self.min_size:
                 continue
-            min_idx, max_idx = np.min(mdr), np.max(mdr)
-            start, end = methyl_starts[min_idx], methyl_starts[max_idx]+1
-            mdr_scores = methyl_p_values[min_idx:max_idx+1]
-            
-            if (end-start) < self.min_size:
-                continue 
 
             if any(mdr_conf[m]==2 for m in mdr):
                 # process high confidence regions
                 hc_idxs = np.where(mdr_conf[mdr] == 2)[0]
                 hc_diff = np.diff(hc_idxs)
-                hc_breaks = np.where(hc_diff != 1)[0] + 1 
+                hc_breaks = np.where(hc_diff > self.merge_distance)[0] + 1 
                 hc_mdrs = np.split(hc_idxs, hc_breaks)
 
-                last_end = start
+                lc_start_idx = mdr[0]
+                lc_scores = []
+
                 for hc in hc_mdrs: 
-                    min_hc_i, max_hc_i = mdr[np.min(hc)], mdr[np.max(hc)]
-                    hc_start, hc_end = methyl_starts[min_hc_i], methyl_starts[max_hc_i]+1
-                    hc_scores = methyl_p_values[min_hc_i:max_hc_i+1]
+                    hc_start_idx, hc_end_idx = mdr[hc[0]], mdr[hc[-1]]
+                    hc_scores = methyl_p_values[hc_start_idx:hc_end_idx+1]
 
-                    if last_end < hc_start:
-                        #  create entry for low confidence region before high confidence region
-                        lc_scores = methyl_p_values[min_idx:min_hc_i]
-                        if len(lc_scores) > 0:
-                            temp_entries.append((last_end, hc_start, f"low_confidence_{self.output_label}", lc_scores, self.lc_color))
-
-                    # only add high confidence entries if they meet the minimum size requirement
-                    if (hc_end-hc_start) >= self.min_size:
-                        temp_entries.append((hc_start, hc_end, f"{self.output_label}", hc_scores, self.hc_color))
+                    if len(hc) >= self.min_size:
+                        # Add low confidence region before high confidence region
+                        if lc_scores:
+                            create_entry_helper(lc_start_idx, hc_start_idx, f"low_confidence_{self.output_label}", lc_scores, self.lc_color)
+                            lc_scores = []
+                        # Add high confidence region
+                        create_entry_helper(hc_start_idx, hc_end_idx, f"{self.output_label}", hc_scores, self.hc_color)
+                        lc_start_idx = hc_end_idx + 1
                     else:
-                        # if high confidence region is too small, mark it as low confidence
-                        temp_entries.append((hc_start, hc_end, f"low_confidence_{self.output_label}", hc_scores, self.lc_color))
-                    last_end = hc_end
+                        # If high confidence region is too small, add it to low confidence scores
+                        lc_scores.extend(hc_scores)
 
-                # create entry for region after last high-confidence region if it exists
-                if last_end < end:
-                    lc_scores = methyl_p_values[max_hc_i:max_idx]
-                    if len(lc_scores) > 0 and (end - last_end) >= self.min_size:
-                        temp_entries.append((last_end, end, f"low_confidence_{self.output_label}", lc_scores, self.lc_color))
-
+                # Add remaining low confidence region
+                if lc_scores or lc_start_idx <= mdr[-1]:
+                    lc_scores.extend(methyl_p_values[lc_start_idx:mdr[-1]+1])
+                    create_entry_helper(lc_start_idx, mdr[-1], f"low_confidence_{self.output_label}", lc_scores, self.lc_color)
+                    
             else:
                 # if none of the CpGs in the current run are high confidence
-                temp_entries.append((start, end, f"low_confidence_{self.output_label}", mdr_scores, self.lc_color))
-
-
-        # Merge nearby entries
-        prev_entry = temp_entries[0]
-        for cur_entry in temp_entries[1:]:
-            if ((cur_entry[0] - prev_entry[1]) < self.merge_distance):
-                # Entries are close enough to merge
-                if ("low_confidence" in prev_entry[2]) and ("low_confidence" in cur_entry[2]):
-                    # Merge two low confidence entries
-                    prev_entry = (prev_entry[0], cur_entry[1], cur_entry[2], np.concatenate((prev_entry[3], cur_entry[3])), cur_entry[4])
-                elif ("low_confidence" not in prev_entry[2]) and ("low_confidence" in cur_entry[2]):
-                    # Keep high confidence entry separate, start new low confidence entry
-                    create_entry_helper(prev_entry[0], prev_entry[1], prev_entry[2], prev_entry[3], prev_entry[4])
-                    prev_entry = cur_entry
-                elif ("low_confidence" in prev_entry[2]) and ("low_confidence" not in cur_entry[2]):
-                    # End low confidence entry, start new high confidence entry
-                    create_entry_helper(prev_entry[0], cur_entry[0], prev_entry[2], prev_entry[3], prev_entry[4])
-                    prev_entry = cur_entry
-                else: 
-                    # Merge two high confidence entries
-                    prev_entry = (prev_entry[0], cur_entry[1], cur_entry[2], np.concatenate((prev_entry[3], cur_entry[3])), cur_entry[4])
-            else:
-                # Entries are not close enough to merge
-                create_entry_helper(prev_entry[0], prev_entry[1], prev_entry[2], prev_entry[3], prev_entry[4])
-                prev_entry = cur_entry
-        # Add the last entry
-        create_entry_helper(prev_entry[0], prev_entry[1], prev_entry[2], prev_entry[3], prev_entry[4])
+                create_entry_helper(mdr[0], mdr[-1], f"low_confidence_{self.output_label}", lc_scores, self.lc_color)
 
         return mdrs
 
