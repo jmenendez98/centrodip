@@ -126,7 +126,7 @@ class calculate_matrices:
                     
             else:
                 # if none of the CpGs in the current run are high confidence
-                create_entry_helper(mdr[0], mdr[-1], f"low_confidence_{self.output_label}", lc_scores, self.lc_color)
+                create_entry_helper(mdr[0], mdr[-1], f"low_confidence_{self.output_label}", methyl_p_values[mdr[0]:mdr[-1]+1], self.lc_color)
 
         return mdrs
 
@@ -169,7 +169,7 @@ def main():
 
     # required inputs
     argparser.add_argument("bedmethyl", type=str, help="Path to the bedmethyl file")
-    argparser.add_argument("censat", type=str, help="Path to the censat BED file")
+    argparser.add_argument("regions", type=str, help="Path to BED file of regions")
     argparser.add_argument("output", type=str, help="Path to the output BED file")
 
     # bed_parser arguments
@@ -192,31 +192,12 @@ def main():
         default=1,
         help="Minimum valid coverage to consider a methylation site (read from full modkit pileup files). (default: 1)",
     )
-    argparser.add_argument(
-        "-s",
-        "--sat_type",
-        type=str,
-        default="active_hor",
-        help='Comma-separated list of satellite types/names to filter CenSat bed file. (default: "active_hor")',
-    )
-    argparser.add_argument(
-        "--edge_filter",
-        type=int,
-        default=0,
-        help='Number of base pairs from edge of region to not include in the methylation calculations. (default: 0)',
-    )
-    argparser.add_argument(
-        "--regions_prefiltered",
-        action="store_true",
-        default=False,
-        help="Set flag if your annotations bed file is already subset to only the region you desire. (default: False)",
-    )
 
     # calculate_matrices arguments
     argparser.add_argument(
         "--window_size",
         type=int,
-        default=21,
+        default=51,
         help="Number of CpGs to include in rolling window for CDR calculation. (default: 31)",
     )
     argparser.add_argument(
@@ -240,13 +221,13 @@ def main():
     argparser.add_argument(
         "--min_size",
         type=int,
-        default=1000,
+        default=51,
         help="Minimum size for a region to be labelled as an MDR. (default: 1000)",
     )
     argparser.add_argument(
         "--merge_distance",
         type=int,
-        default=1000,
+        default=25,
         help="Distance in bp to merge low confidence MDR annotations. (default: 1000)",
     )
     argparser.add_argument(
@@ -276,9 +257,7 @@ def main():
         mod_code=args.mod_code,
         methyl_bedgraph=args.methyl_bedgraph,
         min_valid_cov=args.min_valid_cov,
-        sat_type=sat_types,
         edge_filter=args.edge_filter,
-        regions_prefiltered=args.regions_prefiltered,
     )
 
     regions_dict, methylation_dict = parse_beds.process_files(

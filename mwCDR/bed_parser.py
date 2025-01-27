@@ -11,9 +11,7 @@ class bed_parser:
         mod_code: Optional[str] = None,
         min_valid_cov: int = 1,
         methyl_bedgraph: bool = False,
-        sat_type: Optional[Union[str, List[str]]] = None,
-        edge_filter: int = 10000,
-        regions_prefiltered: bool = False
+        region_edge_filter: int = 10000,
     ):
         """
         Initialize the parser with optional filtering parameters.
@@ -30,9 +28,7 @@ class bed_parser:
         self.min_valid_cov = min_valid_cov
         self.methyl_bedgraph = methyl_bedgraph
 
-        self.sat_type = [sat_type] if isinstance(sat_type, str) else (sat_type or [])
-        self.edge_filter = edge_filter
-        self.regions_prefiltered = regions_prefiltered
+        self.region_edge_filter = region_edge_filter
         
         self.temp_dir = tempfile.gettempdir()
 
@@ -69,11 +65,10 @@ class bed_parser:
                 if chrom not in region_dict:
                     region_dict[chrom] = {"starts": [], "ends": []}
 
-                if (self.regions_prefiltered) or any(sat in columns[3] for sat in self.sat_type):
-                    if (end - self.edge_filter) < start:
-                        continue
-                    region_dict[chrom]["starts"].append(start+self.edge_filter)
-                    region_dict[chrom]["ends"].append(end-self.edge_filter)
+                if (end - self.region_edge_filter) < start:
+                    continue
+                region_dict[chrom]["starts"].append(start+self.region_edge_filter)
+                region_dict[chrom]["ends"].append(end-self.region_edge_filter)
 
         return region_dict
     
