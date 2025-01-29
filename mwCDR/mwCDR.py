@@ -194,13 +194,13 @@ class mwCDR:
         self.cdr_p = cdr_p
         self.transition_p = transition_p
 
-        self.min_sig_cpgs = min_sig_cpgs # min size of annotation in CpG space
-        self.merge_distance = merge_distance # number of CpGs to merge across
+        self.min_sig_cpgs = min_sig_cpgs
+        self.merge_distance = merge_distance
 
         self.enrichment = enrichment
 
-        self.hc_color = cdr_color # "50,50,255"
-        self.lc_color = transition_color # "150,150,150"
+        self.cdr_color = cdr_color
+        self.transition_color = transition_color
 
         self.threads = threads
         self.output_label = output_label
@@ -279,10 +279,10 @@ class mwCDR:
                     if len([idx for idx in hc_idxs if idx in hc]) >= self.min_sig_cpgs:
                         # Add low confidence region before high confidence region
                         if lc_scores:
-                            create_entry_helper(lc_start_idx, hc_start_idx, f"transition_{self.output_label}", lc_scores, self.lc_color)
+                            create_entry_helper(lc_start_idx, hc_start_idx, f"transition_{self.output_label}", lc_scores, self.transition_color)
                             lc_scores = []
                         # Add high confidence region
-                        create_entry_helper(hc_start_idx, hc_end_idx, f"{self.output_label}", hc_scores, self.hc_color)
+                        create_entry_helper(hc_start_idx, hc_end_idx, f"{self.output_label}", hc_scores, self.cdr_color)
                         lc_start_idx = hc_end_idx + 1
                     else:
                         # If high confidence region is too small, add it to low confidence scores
@@ -291,7 +291,7 @@ class mwCDR:
                 # Add remaining low confidence region
                 if lc_scores or lc_start_idx <= mdr[-1]:
                     lc_scores.extend(methyl_p_values[lc_start_idx:mdr[-1]+1])
-                    create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", lc_scores, self.lc_color)
+                    create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", lc_scores, self.transition_color)
                     
         return mdrs
 
@@ -420,6 +420,18 @@ def main():
 
     # output arguments
     argparser.add_argument(
+        "--cdr_color",
+        type=str,
+        default="50,50,255",
+        help='Pass flag in if you want to output all data generated throughout mwCDR process. (default: False)',
+    )
+    argparser.add_argument(
+        "--transition_color",
+        type=str,
+        default="150,150,150",
+        help='Pass flag in if you want to output all data generated throughout mwCDR process. (default: False)',
+    )
+    argparser.add_argument(
         "--output_all",
         action='store_true',
         default=False,
@@ -477,6 +489,8 @@ def main():
         merge_distance=args.merge_distance,
         enrichment=args.enrichment,
         threads=args.threads,
+        cdr_color=args.cdr_color,
+        transition_color=args.transition_color,
         output_label=args.output_label,
     )
 

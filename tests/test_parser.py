@@ -16,8 +16,7 @@ class TestParser:
             mod_code="m",
             methyl_bedgraph=False,
             min_valid_cov=1,
-            sat_type=["active_hor"],
-            regions_prefiltered=False,
+            region_edge_filter=0,
         )
 
     def test_fake_bedfile(self, test_data_dir, parser):

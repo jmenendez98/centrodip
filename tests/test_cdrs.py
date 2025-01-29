@@ -16,8 +16,7 @@ class TestMatrix:
             mod_code="m",
             methyl_bedgraph=False,
             min_valid_cov=1,
-            sat_type=["active_hor"],
-            regions_prefiltered=False,
+            region_edge_filter=0,
         )
 
         bedmethyl_test = os.path.join(test_data_dir, "bedmethyl_test.bed")
@@ -29,21 +28,25 @@ class TestMatrix:
         )
 
     @pytest.fixture
-    def matrix_calculator(self):
+    def mwcdr(self):
         """Fixture for matrix calculator"""
-        return calculate_matrices(
-            window_size=1190,
-            step_size=1190,
-            min_prior_size=11900,
-            enrichment=False,
-            percentile_emissions=False,
-            x=25.0,
-            y=50.0,
-            z=75.0,
-            output_label="CDR",
+        return mwCDR(
+        window_size=101,
+        step_size=1,
+        stat="mannwhitneyu",
+        cdr_p=0.0000001,
+        transition_p=0.01,
+        min_sig_cpgs=50,
+        merge_distance=50,
+        enrichment=False,
+        threads=4,
+        cdr_color="50,50,255",
+        transition_color="150,150,150",
+        output_label="subCDR",
         )
 
-    def test_making_matrices(self, test_data, matrix_calculator):
+
+    def test_making_matrices(self, test_data, mwcdr):
         """Test making matrices"""
         (
             priors_chrom_dict,
@@ -51,7 +54,7 @@ class TestMatrix:
             labelled_methylation_chrom_dict,
             emission_matrix_chrom_dict,
             transition_matrix_chrom_dict,
-        ) = matrix_calculator.priors_all_chromosomes(
+        ) = mwcdr.mwcdr_all_chromosomes(
             regions_all_chroms=test_data[0],
             methylation_all_chroms=test_data[1],
             prior_threshold=33.3,
