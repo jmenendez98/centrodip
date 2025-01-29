@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from hmmCDR.bed_parser import bed_parser
+from mwCDR.mwCDR import bed_parser
 
 
 class TestParser:

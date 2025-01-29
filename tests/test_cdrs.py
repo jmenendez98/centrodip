@@ -2,12 +2,11 @@ import os
 
 import pytest
 
-from hmmCDR.bed_parser import bed_parser
-from hmmCDR.calculate_matrices import calculate_matrices
-from hmmCDR.hmmcdr import hmmCDR
+from mwCDR.mwCDR import bed_parser
+from mwCDR.mwCDR import mwCDR
 
 
-class TestHMMCDR:
+class TestMatrix:
     @pytest.fixture
     def test_data(self):
         """Fixture to set up test data and parser"""
@@ -38,27 +37,13 @@ class TestHMMCDR:
             min_prior_size=11900,
             enrichment=False,
             percentile_emissions=False,
-            x=25,
+            x=25.0,
             y=50.0,
             z=75.0,
             output_label="CDR",
         )
 
-    @pytest.fixture
-    def hmmcdr(self):
-        """Fixture for matrix calculator"""
-        return hmmCDR(
-            n_iter=1,
-            tol=10,
-            min_cdr_size=3000,
-            min_cdr_score=90,
-            min_low_conf_score=50,
-            main_color="50,50,255",
-            low_conf_color="100,150,200",
-            output_label="CDR",
-        )
-
-    def test_run_hmm(self, test_data, matrix_calculator, hmmcdr):
+    def test_making_matrices(self, test_data, matrix_calculator):
         """Test making matrices"""
         (
             priors_chrom_dict,
@@ -72,23 +57,23 @@ class TestHMMCDR:
             prior_threshold=33.3,
         )
 
-        (hmm_results_chrom_dict, hmm_scores_chrom_dict) = hmmcdr.hmm_all_chromosomes(
-            methylation_emissions_priors_all_chroms=labelled_methylation_chrom_dict,
-            emission_matrix_all_chroms=emission_matrix_chrom_dict,
-            transition_matrix_all_chroms=transition_matrix_chrom_dict,
-        )
-
         # Changed from .values to proper dictionary access
-        assert isinstance(hmm_results_chrom_dict, dict)
-        assert isinstance(hmm_scores_chrom_dict, dict)
-        assert len(hmm_results_chrom_dict) == 1
-        assert len(hmm_scores_chrom_dict) == 1
+        assert isinstance(priors_chrom_dict, dict)
+        assert isinstance(windowmean_chrom_dict, dict)
+        assert isinstance(labelled_methylation_chrom_dict, dict)
+        assert isinstance(emission_matrix_chrom_dict, dict)
+        assert isinstance(transition_matrix_chrom_dict, dict)
+        assert len(priors_chrom_dict) == 1
+        assert len(windowmean_chrom_dict) == 1
+        assert len(labelled_methylation_chrom_dict) == 1
+        assert len(emission_matrix_chrom_dict) == 1
+        assert len(transition_matrix_chrom_dict) == 1
 
         # Add more specific assertions about the matrices
-        for chrom in hmm_results_chrom_dict:
-            assert isinstance(hmm_results_chrom_dict[chrom],dict)
+        for chrom in emission_matrix_chrom_dict:
+            assert emission_matrix_chrom_dict[chrom].shape == (2, 4)
             # Add assertions about matrix shape or content if known
 
-        for chrom in hmm_scores_chrom_dict:
-            assert isinstance(hmm_scores_chrom_dict[chrom], dict)
+        for chrom in transition_matrix_chrom_dict:
+            assert transition_matrix_chrom_dict[chrom].shape == (2, 2)
             # Add assertions about matrix shape or content if known

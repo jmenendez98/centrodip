@@ -3,7 +3,7 @@ import concurrent.futures
 import os
 
 import numpy as np
-from scipy.stats import mannwhitneyu
+import scipy.stats as stats
 
 from typing import Dict, Optional, List, Union
 import tempfile
@@ -175,27 +175,32 @@ class mwCDR:
         self,
         window_size,
         step_size,
-        high_conf_p,
-        low_conf_p,
-        min_size,
+        stat,
+        cdr_p,
+        transition_p,
+        min_sig_cpgs,
         merge_distance,
         enrichment,
+        cdr_color,
+        transition_color,
         threads,
         output_label,
     ):
 
         self.window_size = window_size
         self.step_size = step_size
-        self.high_conf_p = high_conf_p
-        self.low_conf_p = low_conf_p
 
-        self.min_size = min_size # min size of annotation in CpG space
+        self.stat = stat
+        self.cdr_p = cdr_p
+        self.transition_p = transition_p
+
+        self.min_sig_cpgs = min_sig_cpgs # min size of annotation in CpG space
         self.merge_distance = merge_distance # number of CpGs to merge across
 
         self.enrichment = enrichment
 
-        self.hc_color = "50,50,255"
-        self.lc_color = "150,150,150"
+        self.hc_color = cdr_color # "50,50,255"
+        self.lc_color = transition_color # "150,150,150"
 
         self.threads = threads
         self.output_label = output_label
@@ -209,21 +214,27 @@ class mwCDR:
         for i in range(0, len(methyl_starts), self.step_size):
             start = max(0, i - (self.window_size//2))
             end = min(len(methyl_starts), i + (self.window_size//2) + 1)
-
             current_region_frac_mods = methyl_frac_mod[start:end]
-            
+
             alt = "less" if not self.enrichment else "greater"
-            _, p_value = mannwhitneyu(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+            if self.stat == "ks":
+                _, p_value, _, _ = stats.ks_2samp(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+            elif self.stat == "t":
+                _, p_value, _ = stats.ttest_ind(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+            elif "mannwhitneyu": 
+                _, p_value = stats.mannwhitneyu(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+            else:
+                raise ValueError(f"Invalid statistical test: {self.stat}")
+
             for j in range(self.window_size):
                 p_values[i][j] = p_value
-
-        methylation["mannU_p_value"] = [np.median(ps) for ps in p_values]
+        methylation["p-value"] = [np.median(ps) for ps in p_values]
 
         return methylation
 
     def find_priors(self, methylation):
         methyl_starts = np.array(methylation["starts"], dtype=int)
-        methyl_p_values = np.array(methylation["mannU_p_value"], dtype=float)
+        methyl_p_values = np.array(methylation["p-value"], dtype=float)
 
         # create an array to store confidence levels (0: no confidence, 1: low confidence, 2: high confidence)
         mdr_conf = np.zeros(len(methyl_p_values), dtype=int)
@@ -250,9 +261,6 @@ class mwCDR:
         temp_entries = []
         
         for mdr in potential_mdrs:
-            if len(mdr) < self.min_size:
-                continue
-
             if any(mdr_conf[m]==2 for m in mdr):
                 # process high confidence regions
                 hc_idxs = np.where(mdr_conf[mdr] == 2)[0]
@@ -267,10 +275,11 @@ class mwCDR:
                     hc_start_idx, hc_end_idx = mdr[hc[0]], mdr[hc[-1]]
                     hc_scores = methyl_p_values[hc_start_idx:hc_end_idx+1]
 
-                    if len(hc) >= self.min_size:
+                    # the number of hc_idxs that are in hc is >= self.min_sig_cpgs
+                    if len([idx for idx in hc_idxs if idx in hc]) >= self.min_sig_cpgs:
                         # Add low confidence region before high confidence region
                         if lc_scores:
-                            create_entry_helper(lc_start_idx, hc_start_idx, f"low_confidence_{self.output_label}", lc_scores, self.lc_color)
+                            create_entry_helper(lc_start_idx, hc_start_idx, f"transition_{self.output_label}", lc_scores, self.lc_color)
                             lc_scores = []
                         # Add high confidence region
                         create_entry_helper(hc_start_idx, hc_end_idx, f"{self.output_label}", hc_scores, self.hc_color)
@@ -282,28 +291,23 @@ class mwCDR:
                 # Add remaining low confidence region
                 if lc_scores or lc_start_idx <= mdr[-1]:
                     lc_scores.extend(methyl_p_values[lc_start_idx:mdr[-1]+1])
-                    create_entry_helper(lc_start_idx, mdr[-1], f"low_confidence_{self.output_label}", lc_scores, self.lc_color)
+                    create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", lc_scores, self.lc_color)
                     
-            else:
-                # if none of the CpGs in the current run are high confidence
-                create_entry_helper(mdr[0], mdr[-1], f"low_confidence_{self.output_label}", methyl_p_values[mdr[0]:mdr[-1]+1], self.lc_color)
-
         return mdrs
 
 
-    def priors_single_chromosome(self, chrom, methylation, regions):
-        methylation_mannu = self.calculate_regional_stats(methylation)
-        priors = self.find_priors(methylation_mannu)
-        return ( chrom, priors, methylation_mannu)
+    def mwcdr_single_chromosome(self, chrom, methylation, regions):
+        methylation_sig = self.calculate_regional_stats(methylation)
+        priors = self.find_priors(methylation_sig)
+        return ( chrom, priors, methylation_sig)
 
-    def priors_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
-        priors_all_chroms = {}
-        methylation_emissions_priors_all_chroms = {}
+    def mwcdr_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
+        priors_all_chroms, methylation_emissions_priors_all_chroms = {}, {}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
             futures = {
                 executor.submit(
-                    self.priors_single_chromosome,
+                    self.mwcdr_single_chromosome,
                     chrom, methylation_all_chroms[chrom], regions_all_chroms[chrom],
                 ): chrom
                 for chrom in methylation_all_chroms
@@ -311,9 +315,7 @@ class mwCDR:
 
             for future in concurrent.futures.as_completed(futures):
                 (
-                    chrom,
-                    priors,
-                    methylation_emissions_priors,
+                    chrom, priors, methylation_emissions_priors,
                 ) = future.result()
 
                 priors_all_chroms[chrom] = priors
@@ -344,26 +346,27 @@ def main():
         "--methyl_bedgraph",
         action="store_true",
         default=False,
-        help="Flag indicating if the input is a bedgraph. (default: False)",
+        help="Flag indicating the input is a bedgraph. If passed --mod_code and --min_valid_cov are ignored. (default: False)",
     )
     argparser.add_argument(
         "--min_valid_cov",
         type=int,
         default=1,
-        help="Minimum valid coverage to consider a methylation site (read from full modkit pileup files). (default: 1)",
+        help="Minimum valid coverage required to call CDR site. Ignored if bedmethyl input is a bedgraph. (default: 1)",
     )
     argparser.add_argument(
         "--region_edge_filter",
         type=int,
         default=0,
-        help="Trim the edges of each region on the regions input file by this much. (default: 0)",
+        help="Filter out this many base pairs from the edges of each region in regions input. (default: 0)",
     )
 
-    # calculate_matrices arguments
+    # mwCDR arguments
     argparser.add_argument(
+        "-w",
         "--window_size",
         type=int,
-        default=51,
+        default=101,
         help="Number of CpGs to include in rolling window for CDR calculation. (default: 31)",
     )
     argparser.add_argument(
@@ -373,34 +376,40 @@ def main():
         help="Step size for rolling window calculations of CDRs. (default: 1)",
     )
     argparser.add_argument(
-        "--high_conf_p",
-        type=float,
-        default=0.01,
-        help="Cutoff for high confidence MDR p-value. (default: 0.0001)",
+        "--stat",
+        type=str,
+        default='mannwhitneyu',
+        help="Statistical test to perform when determining p-value of CpG site. Options are 'mannwhitneyu', 'ks', or 't' (default: 'mannwhitneyu')",
     )
     argparser.add_argument(
-        "--low_conf_p",
+        "--cdr_p",
+        type=float,
+        default=0.000001,
+        help="Cutoff for high confidence MDR p-value. (default: 0.000001)",
+    )
+    argparser.add_argument(
+        "--transition_p",
         type=float,
         default=0.0,
-        help="Cutoff for low confidence MDR p-value. (default: 0.05)",
+        help="Cutoff for low confidence MDR p-value. (default: 0.0)",
     )
     argparser.add_argument(
-        "--min_size",
+        "--min_sig_cpgs",
         type=int,
-        default=51,
-        help="Minimum size for a region to be labelled as an MDR. (default: 1000)",
+        default=50,
+        help="Minimum size for a region to be labelled as an MDR. (default: 50)",
     )
     argparser.add_argument(
         "--merge_distance",
         type=int,
-        default=25,
-        help="Distance in bp to merge low confidence MDR annotations. (default: 1000)",
+        default=50,
+        help="Distance in bp to merge low confidence MDR annotations. (default: 50)",
     )
     argparser.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
-        help="Enrichment flag. Pass in if you are looking for methylation enriched regions. (default: False)",
+        help="Pass this flag in if you are looking for hypermethylation within the region. Recommended to asjust --output_label if used. (default: False)",
     )
     argparser.add_argument(
         "--threads",
@@ -409,6 +418,7 @@ def main():
         help='Number of threads to use for multithreading. (default: 4)',
     )
 
+    # output arguments
     argparser.add_argument(
         "--output_all",
         action='store_true',
@@ -460,9 +470,10 @@ def main():
     mwcdr = mwCDR(
         window_size=args.window_size,
         step_size=args.step_size,
-        high_conf_p=args.high_conf_p,
-        low_conf_p=args.low_conf_p,
-        min_size=args.min_size,
+        stat=args.stat,
+        cdr_p=args.cdr_p,
+        transition_p=args.transition_p,
+        min_sig_cpgs=args.min_sig_cpgs,
         merge_distance=args.merge_distance,
         enrichment=args.enrichment,
         threads=args.threads,
@@ -471,11 +482,11 @@ def main():
 
     (
         cdrs_all_chroms,
-        methylation_mannu_all_chroms,
-    ) = mwcdr.priors_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
+        methylation_sig_all_chroms,
+    ) = mwcdr.mwcdr_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
 
-    generate_output_bed(cdrs_all_chroms, f"{output_prefix}_mwCDR.bed", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
-    generate_output_bed(methylation_mannu_all_chroms, f"{output_prefix}_mannu.bedgraph", columns=["starts", "ends", "mannU_p_value"])
+    generate_output_bed(cdrs_all_chroms, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
+    generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-value"])
 
 if __name__ == "__main__":
     main()
