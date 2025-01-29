@@ -476,8 +476,8 @@ def main():
     )
 
     if args.output_all:
-        generate_output_bed(regions_dict, f"{output_prefix}_region_frac_mod.bedgraph", columns=["starts", "ends"])
-        generate_output_bed(methylation_dict, f"{output_prefix}_regions.bed", columns=["starts", "ends", "fraction_modified"])
+        generate_output_bed(regions_dict, f"{output_prefix}_regions.bed", columns=["starts", "ends"])
+        generate_output_bed(methylation_dict, f"{output_prefix}_region_frac_mod.bedgraph", columns=["starts", "ends", "fraction_modified"])
 
     mwcdr = mwCDR(
         window_size=args.window_size,
