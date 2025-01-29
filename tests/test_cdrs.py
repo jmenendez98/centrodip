@@ -56,8 +56,7 @@ class TestMatrix:
             transition_matrix_chrom_dict,
         ) = mwcdr.mwcdr_all_chromosomes(
             regions_all_chroms=test_data[0],
-            methylation_all_chroms=test_data[1],
-            prior_threshold=33.3,
+            methylation_all_chroms=test_data[1]
         )
 
         # Changed from .values to proper dictionary access
