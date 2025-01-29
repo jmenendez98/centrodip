@@ -8,7 +8,7 @@ import scipy.stats as stats
 from typing import Dict, Optional, List, Union
 import tempfile
 
-class bed_parser:
+class BedParser:
     """hmmCDR parser to read in region and methylation bed files."""
 
     def __init__(
@@ -170,7 +170,7 @@ class bed_parser:
 
         return region_dict, filtered_methylation_dict
 
-class mwCDR:
+class CentroDip:
     def __init__(
         self,
         window_size,
@@ -296,18 +296,18 @@ class mwCDR:
         return mdrs
 
 
-    def mwcdr_single_chromosome(self, chrom, methylation, regions):
+    def centrodip_single_chromosome(self, chrom, methylation, regions):
         methylation_sig = self.calculate_regional_stats(methylation)
         priors = self.find_priors(methylation_sig)
         return ( chrom, priors, methylation_sig)
 
-    def mwcdr_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
+    def centrodip_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
         priors_all_chroms, methylation_emissions_priors_all_chroms = {}, {}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
             futures = {
                 executor.submit(
-                    self.mwcdr_single_chromosome,
+                    self.centrodip_single_chromosome,
                     chrom, methylation_all_chroms[chrom], regions_all_chroms[chrom],
                 ): chrom
                 for chrom in methylation_all_chroms
@@ -334,7 +334,7 @@ def main():
     argparser.add_argument("regions", type=str, help="Path to BED file of regions")
     argparser.add_argument("output", type=str, help="Path to the output BED file")
 
-    # bed_parser arguments
+    # BedParser arguments
     argparser.add_argument(
         "-m",
         "--mod_code",
@@ -463,7 +463,7 @@ def main():
             for line in all_lines: 
                 file.write("\t".join(line) + "\n")
 
-    parse_beds = bed_parser(
+    parse_beds = BedParser(
         mod_code=args.mod_code,
         methyl_bedgraph=args.methyl_bedgraph,
         min_valid_cov=args.min_valid_cov,
@@ -479,7 +479,7 @@ def main():
         generate_output_bed(regions_dict, f"{output_prefix}_regions.bed", columns=["starts", "ends"])
         generate_output_bed(methylation_dict, f"{output_prefix}_region_frac_mod.bedgraph", columns=["starts", "ends", "fraction_modified"])
 
-    mwcdr = mwCDR(
+    centro_dip = CentroDip(
         window_size=args.window_size,
         step_size=args.step_size,
         stat=args.stat,
@@ -497,7 +497,7 @@ def main():
     (
         cdrs_all_chroms,
         methylation_sig_all_chroms,
-    ) = mwcdr.mwcdr_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
+    ) = centro_dip.centrodip_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
 
     generate_output_bed(cdrs_all_chroms, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
     generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-value"])

@@ -1,6 +1,6 @@
-# `mwCDR`
+# `centrodip`
 
-WIP workflow to call CDRs (and potentially other areas of hypo/hyper-methylation that exist within a semi-homogeneiously methylated region) with high scalability as well as single CpG resolution.
+WIP tool to call CDRs (and potentially other areas of hypo/hyper-methylation that exist within a semi-homogeneiously methylated region) with high scalability as well as single CpG resolution.
 
 Inputs: 
 1. `bedmethyl` - from `modkit pileup` (Refer to [modkit](https://github.com/nanoporetech/modkit) github) or bedgraph equivalent of fraction modified column when using flag `--methyl_bedgraph`

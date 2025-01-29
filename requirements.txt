@@ -1,2 +1,2 @@
 numpy>=1.21.5
-hmmlearn>=0.3.0
+scipy>=1.7.3

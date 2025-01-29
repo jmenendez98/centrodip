@@ -1,27 +1,27 @@
 from setuptools import find_packages, setup
 
 setup(
-    name="mwCDR",
+    name="centrodip",
     version="0.1.0",
-    description="Find CDR locations using bedmethyl file and CenSat annotations. (REQUIRES BEDTOOLS INSTALLED)",
+    description="Find hypomethylated regions in centromeres",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/jmenendez98/hmmCDR",
+    url="https://github.com/jmenendez98/centrodip",
     author="Julian Menendez",
     author_email="jmmenend@ucsc.edu",
     license="MIT",
     packages=find_packages(),
     project_urls={
-        "GitHub": "https://github.com/jmenendez98/hmmCDR",
+        "GitHub": "https://github.com/jmenendez98/centrodip",
         "Lab Website": "https://migalab.com/",
     },
     install_requires=[
         "numpy>=1.21.5",
-        "hmmlearn>=0.3.0",
+        "scipy>=1.7.3",
     ],
     entry_points={
         "console_scripts": [
-            "mwcdr=mwCDR.mwCDR:main",
+            "centrodip=centrodip.centrodip:main",
         ]
     },
     classifiers=[
@@ -33,9 +33,6 @@ setup(
     extras_require={
         "dev": [
             "pytest",
-            "pytest-cov",
-            "isort",
-            "mypy",
         ]
     },
 )

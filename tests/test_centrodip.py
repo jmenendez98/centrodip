@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from mwCDR.mwCDR import bed_parser
-from mwCDR.mwCDR import mwCDR
+from centrodip.centrodip import BedParser
+from centrodip.centrodip import CentroDip
 
 
 class TestMatrix:

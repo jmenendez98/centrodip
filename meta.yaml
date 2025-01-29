@@ -1,4 +1,4 @@
-{% set name = "mwcdr" %}
+{% set name = "centrodip" %}
 {% set version = "0.1.0" %}
 
 package:
@@ -23,22 +23,22 @@ requirements:
   run:
     - python >=3.8,<3.13
     - numpy >=1.21.5
-    - hmmlearn >=0.3.0    # Ensure conda-forge channel is used
+    - scipy >=1.7.3
 
 test:
   imports:
-    - hmmCDR
+    - centrodip
 
 about:
-  home: https://github.com/jmenendez98/hmmCDR
+  home: https://github.com/jmenendez98/centrodip
   license: MIT
-  summary: Use HMM to find CDRs from bedmethyl and CenSat annotation files.
+  summary: Find hypomethylated regions in centromeres
 
 extra:
   recipe-maintainers:
     - jmmenend
   identifiers:
-    - biotools:hmmCDR
+    - biotools:centrodip
   keywords:
     - bioinformatics
     - genomics
