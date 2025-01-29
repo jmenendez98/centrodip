@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from mwCDR.mwCDR import bed_parser
+from centrodip.centrodip import BedParser
 
 
 class TestParser:
