@@ -16,7 +16,7 @@ class bed_parser:
         mod_code: Optional[str] = None,
         min_valid_cov: int = 1,
         methyl_bedgraph: bool = False,
-        region_edge_filter: int = 10000,
+        region_edge_filter: int = 0,
     ):
         """
         Initialize the parser with optional filtering parameters.
