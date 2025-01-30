@@ -1,9 +1,6 @@
 import os
-
 import pytest
-
-from centrodip.centrodip import BedParser
-from centrodip.centrodip import CentroDip
+from centrodip.centrodip import BedParser, CentroDip
 
 
 class TestMatrix:
@@ -28,9 +25,9 @@ class TestMatrix:
         )
 
     @pytest.fixture
-    def mwcdr(self):
+    def centro_dip(self):
         """Fixture for matrix calculator"""
-        return mwCDR(
+        return CentroDip(
         window_size=101,
         step_size=1,
         stat="mannwhitneyu",
@@ -45,37 +42,18 @@ class TestMatrix:
         output_label="subCDR",
         )
 
-
-    def test_making_matrices(self, test_data, mwcdr):
+    def test_centro_dip(self, test_data, mwcdr):
         """Test making matrices"""
         (
-            priors_chrom_dict,
-            windowmean_chrom_dict,
-            labelled_methylation_chrom_dict,
-            emission_matrix_chrom_dict,
-            transition_matrix_chrom_dict,
-        ) = mwcdr.mwcdr_all_chromosomes(
+            cdrs_all_chroms,
+            methylation_sig_all_chroms,
+        ) = centro_dip.centrodip_all_chromosomes(
             regions_all_chroms=test_data[0],
             methylation_all_chroms=test_data[1]
         )
 
-        # Changed from .values to proper dictionary access
-        assert isinstance(priors_chrom_dict, dict)
-        assert isinstance(windowmean_chrom_dict, dict)
-        assert isinstance(labelled_methylation_chrom_dict, dict)
-        assert isinstance(emission_matrix_chrom_dict, dict)
-        assert isinstance(transition_matrix_chrom_dict, dict)
-        assert len(priors_chrom_dict) == 1
-        assert len(windowmean_chrom_dict) == 1
-        assert len(labelled_methylation_chrom_dict) == 1
-        assert len(emission_matrix_chrom_dict) == 1
-        assert len(transition_matrix_chrom_dict) == 1
-
-        # Add more specific assertions about the matrices
-        for chrom in emission_matrix_chrom_dict:
-            assert emission_matrix_chrom_dict[chrom].shape == (2, 4)
-            # Add assertions about matrix shape or content if known
-
-        for chrom in transition_matrix_chrom_dict:
-            assert transition_matrix_chrom_dict[chrom].shape == (2, 2)
-            # Add assertions about matrix shape or content if known
+        assert isinstance(cdrs_all_chroms, dict)
+        assert isinstance(methylation_sig_all_chroms, dict)
+        assert len(cdrs_all_chroms) == 1
+        assert len(methylation_sig_all_chroms) == 1
+        assert len(methylation_sig_all_chroms["chrX_MATERNAL"]["p-values"]) == 62064
