@@ -118,7 +118,7 @@ class BedParser:
                     methylation_dict[chrom]["starts"].append(start)
                     methylation_dict[chrom]["ends"].append(start+1)
                     methylation_dict[chrom]["fraction_modified"].append(frac_mod)
-                elif columns[3] == self.mod_code and int(columns[4]) >= self.min_valid_cov:
+                elif columns[3] == self.mod_code:
                     frac_mod = float(columns[10])
                     methylation_dict[chrom]["starts"].append(start)
                     methylation_dict[chrom]["ends"].append(start+1)
@@ -209,26 +209,32 @@ class CentroDip:
         methyl_starts = np.array(methylation["starts"], dtype=int)
         methyl_frac_mod = np.array(methylation["fraction_modified"], dtype=float)
 
-        p_values = np.array([np.ones(self.window_size) for _ in range(len(methyl_starts))])
+        n = len(methyl_starts)
+        window_half = self.window_size // 2
+        p_values = np.ones((n, self.window_size // self.step_size))
 
-        for i in range(0, len(methyl_starts), self.step_size):
-            start = max(0, i - (self.window_size//2))
-            end = min(len(methyl_starts), i + (self.window_size//2) + 1)
-            current_region_frac_mods = methyl_frac_mod[start:end]
+        indices = np.arange(n)
+        start_indices = np.maximum(0, indices - window_half)
+        end_indices = np.minimum(n, indices + window_half + 1)
 
-            alt = "less" if not self.enrichment else "greater"
+        alt = "less" if not self.enrichment else "greater"
+
+        for i in range(0, n, self.step_size):
+            current_region_frac_mods = methyl_frac_mod[start_indices[i]:end_indices[i]]
+
             if self.stat == "ks":
-                _, p_value, _, _ = stats.ks_2samp(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+                statistics = stats.ks_2samp(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
             elif self.stat == "t":
-                _, p_value, _ = stats.ttest_ind(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+                statistics = stats.ttest_ind(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
             elif "mannwhitneyu": 
-                _, p_value = stats.mannwhitneyu(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+                statistics = stats.mannwhitneyu(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
             else:
                 raise ValueError(f"Invalid statistical test: {self.stat}")
 
-            for j in range(self.window_size):
-                p_values[i][j] = p_value
-        methylation["p-values"] = [np.median(ps) for ps in p_values]
+            for j in range(0, end_indices[i]-start_indices[i]-1):
+                p_values[i, j] = statistics[1]
+
+        methylation["p-values"] = np.median(p_values, axis=1)
 
         return methylation
 
@@ -351,7 +357,7 @@ def main():
     argparser.add_argument(
         "--min_valid_cov",
         type=int,
-        default=1,
+        default=0,
         help="Minimum valid coverage required to call CDR site. Ignored if bedmethyl input is a bedgraph. (default: 1)",
     )
     argparser.add_argument(
