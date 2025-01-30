@@ -228,18 +228,18 @@ class CentroDip:
 
             for j in range(self.window_size):
                 p_values[i][j] = p_value
-        methylation["p-value"] = [np.median(ps) for ps in p_values]
+        methylation["p-values"] = [np.median(ps) for ps in p_values]
 
         return methylation
 
     def find_priors(self, methylation):
         methyl_starts = np.array(methylation["starts"], dtype=int)
-        methyl_p_values = np.array(methylation["p-value"], dtype=float)
+        methyl_p_values = np.array(methylation["p-values"], dtype=float)
 
         # create an array to store confidence levels (0: no confidence, 1: low confidence, 2: high confidence)
         mdr_conf = np.zeros(len(methyl_p_values), dtype=int)
-        mdr_conf = np.where(np.array(methyl_p_values) <= self.low_conf_p, 1, mdr_conf)
-        mdr_conf = np.where(np.array(methyl_p_values) <= self.high_conf_p, 2, mdr_conf)
+        mdr_conf = np.where(np.array(methyl_p_values) <= self.transition_p, 1, mdr_conf)
+        mdr_conf = np.where(np.array(methyl_p_values) <= self.cdr_p, 2, mdr_conf)
         
         mdrs = {"starts": [], "ends": [], "names": [], "scores": [], "strands": [], "itemRgbs": []}
         
@@ -500,7 +500,7 @@ def main():
     ) = centro_dip.centrodip_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
 
     generate_output_bed(cdrs_all_chroms, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
-    generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-value"])
+    generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-values"])
 
 if __name__ == "__main__":
     main()
