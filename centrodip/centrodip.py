@@ -1,5 +1,6 @@
 import argparse
 import concurrent.futures
+import warnings
 import os
 
 import numpy as np
@@ -92,9 +93,6 @@ class BedParser:
         """
         if not os.path.exists(methylation_path):
             raise FileNotFoundError(f"File not found: {methylation_path}")
-        
-        if self.methyl_bedgraph and self.min_valid_cov > 1:
-            raise ValueError(f"{methylation_path} {self.min_valid_cov} bedgraph file cannot be filtered by coverage.")
 
         methylation_dict: Dict[str, Dict[str, list]] = {}
 
@@ -103,6 +101,8 @@ class BedParser:
             
             if any(len(cols) < (4 if self.methyl_bedgraph else 11) for cols in lines):
                 raise TypeError(f"Insufficient columns in {methylation_path}. Likely incorrectly formatted.")
+            elif (self.methyl_bedgraph) and any(len(cols) > 4 for cols in lines):
+                warnings.warn(f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. Potentially incorrectly formatted bedgraph file.")
 
             for line in lines:
                 columns = line.strip().split('\t')
@@ -438,7 +438,7 @@ def main():
         "--window_size",
         type=int,
         default=101,
-        help="Number of CpGs to include in rolling window for CDR calculation. (default: 31)",
+        help="Number of CpGs to include in rolling window for CDR calculation. (default: 101)",
     )
     argparser.add_argument(
         "--step_size",
@@ -455,8 +455,8 @@ def main():
     argparser.add_argument(
         "--cdr_p",
         type=float,
-        default=0.000001,
-        help="Cutoff for high confidence MDR p-value. (default: 0.000001)",
+        default=0.0000000001,
+        help="Cutoff for high confidence MDR p-value. (default: 1e-10)",
     )
     argparser.add_argument(
         "--transition_p",
@@ -517,6 +517,10 @@ def main():
 
     args = argparser.parse_args()
     output_prefix = os.path.splitext(args.output)[0]
+
+    if args.methyl_bedgraph and args.min_valid_cov > 1:
+        raise ValueError("Cannot pass --min_valid_cov > 1 with --methyl_bedgraph")
+
 
     def generate_output_bed(all_chroms_dict, output_file, columns=["starts", "ends"]):
         all_lines = []
