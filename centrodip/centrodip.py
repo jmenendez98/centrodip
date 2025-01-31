@@ -14,7 +14,6 @@ class BedParser:
     def __init__(
         self,
         mod_code: Optional[str] = None,
-        min_valid_cov: int = 1,
         methyl_bedgraph: bool = False,
         region_edge_filter: int = 0,
     ):
@@ -30,7 +29,6 @@ class BedParser:
             regions_prefiltered: Whether the regions bed is already subset
         """
         self.mod_code = mod_code
-        self.min_valid_cov = min_valid_cov
         self.methyl_bedgraph = methyl_bedgraph
 
         self.region_edge_filter = region_edge_filter
@@ -111,18 +109,21 @@ class BedParser:
                 chrom = columns[0]
                 start = int(columns[1])
                 if chrom not in methylation_dict.keys():
-                    methylation_dict[chrom] = {"starts": [], "ends": [], "fraction_modified": []}
+                    methylation_dict[chrom] = {"starts": [], "ends": [], "fraction_modified": [], "valid_coverage": []}
                     
                 if self.methyl_bedgraph:
                     frac_mod = float(columns[3])
                     methylation_dict[chrom]["starts"].append(start)
                     methylation_dict[chrom]["ends"].append(start+1)
                     methylation_dict[chrom]["fraction_modified"].append(frac_mod)
+                    methylation_dict[chrom]["valid_coverage"].append(1)
                 elif columns[3] == self.mod_code:
                     frac_mod = float(columns[10])
+                    valid_cov = int(columns[4])
                     methylation_dict[chrom]["starts"].append(start)
                     methylation_dict[chrom]["ends"].append(start+1)
                     methylation_dict[chrom]["fraction_modified"].append(frac_mod)
+                    methylation_dict[chrom]["valid_coverage"].append(valid_cov)
                     
         return methylation_dict
 
@@ -163,7 +164,8 @@ class BedParser:
                 filtered_methylation_dict[chrom] = {
                     "starts": [start for start, overlap in zip(methylation_data["starts"], overlaps) if overlap],
                     "ends": [end for end, overlap in zip(methylation_data["ends"], overlaps) if overlap],
-                    "fraction_modified": [frac_mod for frac_mod, overlap in zip(methylation_data["fraction_modified"], overlaps) if overlap]
+                    "fraction_modified": [frac_mod for frac_mod, overlap in zip(methylation_data["fraction_modified"], overlaps) if overlap],
+                    "valid_coverage": [valid_coverage for valid_coverage, overlap in zip(methylation_data["valid_coverage"], overlaps) if overlap],
                 }
             else: 
                 ValueError(f"No methylation data from {methylation_path} overlapping with {regions_path}.")
@@ -175,6 +177,7 @@ class CentroDip:
         self,
         window_size,
         step_size,
+        min_valid_cov,
         stat,
         cdr_p,
         transition_p,
@@ -189,6 +192,8 @@ class CentroDip:
 
         self.window_size = window_size
         self.step_size = step_size
+
+        self.min_valid_cov = min_valid_cov
 
         self.stat = stat
         self.cdr_p = cdr_p
@@ -238,7 +243,7 @@ class CentroDip:
 
         return methylation
 
-    def find_priors(self, methylation):
+    def find_cdrs(self, methylation):
         methyl_starts = np.array(methylation["starts"], dtype=int)
         methyl_p_values = np.array(methylation["p-values"], dtype=float)
 
@@ -301,14 +306,73 @@ class CentroDip:
                     
         return mdrs
 
+    def find_low_coverage(self, methylation):
+        methyl_starts = np.array(methylation["starts"], dtype=int)
+        methyl_coverage = np.array(methylation["valid_coverage"], dtype=int)
+
+        # find all low coverage CpGs
+        low_cov_idxs = np.where(methyl_coverage > self.min_valid_cov)[0]
+        low_cov_diff = np.diff(low_cov_idxs)
+        low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
+        low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
+
+        low_cov_regions = {"starts": [], "ends": []}
+
+        for region in low_cov_regions:
+            start_idx, end_idx = region[0], region[-1]
+            low_cov_regions["starts"].append(methyl_starts[start_idx])
+            low_cov_regions["ends"].append(methyl_starts[end_idx] + 1)
+
+        return low_cov_regions
+
+    def remove_low_coverage(self, cdrs, low_cov_regions):
+
+        filtered_cdrs = {
+            "starts": cdrs["starts"].copy(),
+            "ends": cdrs["ends"].copy(),
+            "names": cdrs["names"].copy(),
+            "scores": cdrs["scores"].copy(),
+            "strands": cdrs["strands"].copy(),
+            "itemRgbs": cdrs["itemRgbs"].copy()
+        }
+
+        indices_to_remove = set()
+
+        # Iterate over the indices of cdrs
+        for i in range(len(filtered_cdrs["starts"])):
+            cdr_start, cdr_end = filtered_cdrs["starts"][i], filtered_cdrs["ends"][i]
+
+            # Check for overlap with low coverage regions
+            for j in range(len(low_cov_regions["starts"])):
+                low_cov_start, low_cov_end = low_cov_regions["starts"][j], low_cov_regions["ends"][j]
+
+                if (low_cov_start < cdr_end) and (low_cov_end > cdr_start):
+                    indices_to_remove.add(i)
+                    break  # No need to check other low_cov regions once overlap is found
+
+        # Remove the indices marked for removal
+        for index in sorted(indices_to_remove, reverse=True):
+            filtered_cdrs["starts"].pop(index)
+            filtered_cdrs["ends"].pop(index)
+            filtered_cdrs["names"].pop(index)
+            filtered_cdrs["scores"].pop(index)
+            filtered_cdrs["strands"].pop(index)
+            filtered_cdrs["itemRgbs"].pop(index)
+
+        return filtered_cdrs
 
     def centrodip_single_chromosome(self, chrom, methylation, regions):
-        methylation_sig = self.calculate_regional_stats(methylation)
-        priors = self.find_priors(methylation_sig)
-        return ( chrom, priors, methylation_sig)
+        methylation_pvalues = self.calculate_regional_stats(methylation)
+        cdrs = self.find_cdrs(methylation_pvalues)
+
+        if self.min_valid_cov > 1:
+            low_cov_regions = self.find_low_coverage(methylation)
+            cdr = self.remove_low_coverage(cdrs, low_cov_regions)
+            return ( chrom, cdrs, low_cov_regions, methylation_pvalues)
+        return ( chrom, cdrs, {}, methylation_pvalues)
 
     def centrodip_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
-        priors_all_chroms, methylation_emissions_priors_all_chroms = {}, {}
+        cdrs_all_chroms, low_cov_all_chroms, methylation_pvalues_all_chroms = {}, {}, {}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
             futures = {
@@ -321,18 +385,19 @@ class CentroDip:
 
             for future in concurrent.futures.as_completed(futures):
                 (
-                    chrom, priors, methylation_emissions_priors,
+                    chrom, cdrs, low_cov_regions, methylation_pvalues,
                 ) = future.result()
 
-                priors_all_chroms[chrom] = priors
-                methylation_emissions_priors_all_chroms[chrom] = methylation_emissions_priors
+                cdrs_all_chroms[chrom] = cdrs
+                low_cov_all_chroms[chrom] = low_cov_regions
+                methylation_pvalues_all_chroms[chrom] = methylation_pvalues
 
-        return priors_all_chroms, methylation_emissions_priors_all_chroms
+        return cdrs_all_chroms, low_cov_all_chroms, methylation_pvalues_all_chroms
 
 
 def main():
     argparser = argparse.ArgumentParser(
-        description="Process bedMethyl and CenSat BED file to produce hmmCDR priors"
+        description="Process bedMethyl and CenSat BED file to produce CDR predictions."
     )
 
     # required inputs
@@ -357,7 +422,7 @@ def main():
     argparser.add_argument(
         "--min_valid_cov",
         type=int,
-        default=0,
+        default=1,
         help="Minimum valid coverage required to call CDR site. Ignored if bedmethyl input is a bedgraph. (default: 1)",
     )
     argparser.add_argument(
@@ -447,7 +512,7 @@ def main():
         "--output_label",
         type=str,
         default="subCDR",
-        help='Label to use for name column of priorCDR BED file. (default: "subCDR")',
+        help='Label to use for name column of output file. (default: "subCDR")',
     )
 
     args = argparser.parse_args()
@@ -472,7 +537,7 @@ def main():
     parse_beds = BedParser(
         mod_code=args.mod_code,
         methyl_bedgraph=args.methyl_bedgraph,
-        min_valid_cov=args.min_valid_cov,
+
         region_edge_filter=args.region_edge_filter,
     )
 
@@ -488,6 +553,7 @@ def main():
     centro_dip = CentroDip(
         window_size=args.window_size,
         step_size=args.step_size,
+        min_valid_cov=args.min_valid_cov,
         stat=args.stat,
         cdr_p=args.cdr_p,
         transition_p=args.transition_p,
@@ -502,11 +568,16 @@ def main():
 
     (
         cdrs_all_chroms,
+        low_coverage_all_chroms,
         methylation_sig_all_chroms,
     ) = centro_dip.centrodip_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
 
+    if args.output_all:
+        generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-values"])
+        generate_output_bed(low_coverage_all_chroms, f"{output_prefix}_low_cov.bed", columns=["starts", "ends"])
+
     generate_output_bed(cdrs_all_chroms, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
-    generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-values"])
+
 
 if __name__ == "__main__":
     main()
