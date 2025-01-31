@@ -46,6 +46,7 @@ class TestMatrix:
         """Test making matrices"""
         (
             cdrs_all_chroms,
+            low_cov_all_chroms,
             methylation_sig_all_chroms,
         ) = centro_dip.centrodip_all_chromosomes(
             regions_all_chroms=test_data[0],
