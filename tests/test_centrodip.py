@@ -12,7 +12,6 @@ class TestMatrix:
         bed_parser = BedParser(
             mod_code="m",
             methyl_bedgraph=False,
-            min_valid_cov=1,
             region_edge_filter=0,
         )
 
@@ -30,6 +29,7 @@ class TestMatrix:
         return CentroDip(
             window_size=101,
             step_size=1,
+            min_valid_cov=1,
             stat="mannwhitneyu",
             cdr_p=0.0000001,
             transition_p=0.01,

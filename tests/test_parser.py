@@ -13,7 +13,6 @@ class TestParser:
         return BedParser(
             mod_code="m",
             methyl_bedgraph=False,
-            min_valid_cov=1,
             region_edge_filter=0,
         )
 
