@@ -99,13 +99,14 @@ class BedParser:
         with open(methylation_path, 'r') as file:
             lines = file.readlines()
             
-            if any(len(cols) < (4 if self.methyl_bedgraph else 11) for cols in lines):
-                raise TypeError(f"Insufficient columns in {methylation_path}. Likely incorrectly formatted.")
-            elif (self.methyl_bedgraph) and any(len(cols) > 4 for cols in lines):
-                warnings.warn(f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. Potentially incorrectly formatted bedgraph file.")
-
             for line in lines:
                 columns = line.strip().split('\t')
+
+                if (len(columns) < (4 if self.methyl_bedgraph else 11)):
+                    raise TypeError(f"Insufficient columns in {methylation_path}. Likely incorrectly formatted.")
+                elif (self.methyl_bedgraph) and (len(columns) > 4):
+                    warnings.warn(f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. Potentially incorrectly formatted bedgraph file.")
+
                 chrom = columns[0]
                 start = int(columns[1])
                 if chrom not in methylation_dict.keys():
@@ -256,29 +257,37 @@ class CentroDip:
         
         # helper function to add entries to the mdrs dictionary
         def create_entry_helper(start_idx, end_idx, name, scores, color):
-            mdrs["starts"].append(methyl_starts[start_idx])
-            mdrs["ends"].append(methyl_starts[end_idx] + 1)
-            mdrs["names"].append(name)
-            mdrs["scores"].append(np.median(scores))
-            mdrs["strands"].append(".")
-            mdrs["itemRgbs"].append(color)
+            if start_idx <= end_idx:
+                mdrs["starts"].append(methyl_starts[start_idx])
+                mdrs["ends"].append(methyl_starts[end_idx] + 1)
+                mdrs["names"].append(name)
+                mdrs["scores"].append(np.median(scores))
+                mdrs["strands"].append(".")
+                mdrs["itemRgbs"].append(color)
 
         # find potential MDR regions
         potential_mdr_idxs = np.where(mdr_conf > 0)[0]
+        if len(potential_mdr_idxs) == 0:
+            return mdrs
+
         potential_mdr_diff = np.diff(potential_mdr_idxs)
         potential_mdr_breaks = np.where(potential_mdr_diff > self.merge_distance)[0] + 1 
         potential_mdrs = np.split(potential_mdr_idxs, potential_mdr_breaks)
-
-        temp_entries = []
         
         for mdr in potential_mdrs:
+            # check if the region contains any high-confidence points
             if any(mdr_conf[m]==2 for m in mdr):
-                # process high confidence regions
+                # find high-confidence spans within this MDR
                 hc_idxs = np.where(mdr_conf[mdr] == 2)[0]
                 hc_diff = np.diff(hc_idxs)
                 hc_breaks = np.where(hc_diff > self.merge_distance)[0] + 1 
                 hc_mdrs = np.split(hc_idxs, hc_breaks)
 
+                # is there any hc_mdrs with length over self.min_sig_cpgs
+                if not any(len(hc) >= self.min_sig_cpgs for hc in hc_mdrs):
+                    continue
+
+                # track the start of potential low-confidence transition
                 lc_start_idx = mdr[0]
                 lc_scores = []
 
@@ -286,23 +295,25 @@ class CentroDip:
                     hc_start_idx, hc_end_idx = mdr[hc[0]], mdr[hc[-1]]
                     hc_scores = methyl_p_values[hc_start_idx:hc_end_idx+1]
 
-                    # the number of hc_idxs that are in hc is >= self.min_sig_cpgs
+                    # check if high-confidence segment has enough significant CpGs
                     if len([idx for idx in hc_idxs if idx in hc]) >= self.min_sig_cpgs:
-                        # Add low confidence region before high confidence region
-                        if lc_scores:
-                            create_entry_helper(lc_start_idx, hc_start_idx, f"transition_{self.output_label}", lc_scores, self.transition_color)
+                        # add low-confidence transition before high-confidence region if needed
+                        if lc_start_idx < hc_start_idx:
+                            create_entry_helper(lc_start_idx, hc_start_idx, f"transition_{self.output_label}", 
+                                                methyl_p_values[lc_start_idx:hc_start_idx], self.transition_color)
                             lc_scores = []
-                        # Add high confidence region
+
+                        # add high-confidence region
                         create_entry_helper(hc_start_idx, hc_end_idx, f"{self.output_label}", hc_scores, self.cdr_color)
-                        lc_start_idx = hc_end_idx + 1
+                        lc_start_idx = hc_end_idx
                     else:
-                        # If high confidence region is too small, add it to low confidence scores
+                        # if high-confidence region is too small, add to low-confidence scores
                         lc_scores.extend(hc_scores)
 
                 # Add remaining low confidence region
                 if lc_scores or lc_start_idx <= mdr[-1]:
-                    lc_scores.extend(methyl_p_values[lc_start_idx:mdr[-1]+1])
-                    create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", lc_scores, self.transition_color)
+                    final_lc_scores = lc_scores + list(methyl_p_values[lc_start_idx:mdr[-1]+1])
+                    create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", final_lc_scores, self.transition_color)
                     
         return mdrs
 
@@ -326,7 +337,6 @@ class CentroDip:
         return low_cov_regions
 
     def remove_low_coverage(self, cdrs, low_cov_regions):
-
         filtered_cdrs = {
             "starts": cdrs["starts"].copy(),
             "ends": cdrs["ends"].copy(),
@@ -338,19 +348,19 @@ class CentroDip:
 
         indices_to_remove = set()
 
-        # Iterate over the indices of cdrs
+        # iterate over the indices of cdrs
         for i in range(len(filtered_cdrs["starts"])):
             cdr_start, cdr_end = filtered_cdrs["starts"][i], filtered_cdrs["ends"][i]
 
-            # Check for overlap with low coverage regions
+            # check for overlap with low coverage regions
             for j in range(len(low_cov_regions["starts"])):
                 low_cov_start, low_cov_end = low_cov_regions["starts"][j], low_cov_regions["ends"][j]
 
                 if (low_cov_start < cdr_end) and (low_cov_end > cdr_start):
                     indices_to_remove.add(i)
-                    break  # No need to check other low_cov regions once overlap is found
+                    break
 
-        # Remove the indices marked for removal
+        # remove the indices marked for removal
         for index in sorted(indices_to_remove, reverse=True):
             filtered_cdrs["starts"].pop(index)
             filtered_cdrs["ends"].pop(index)
@@ -432,7 +442,7 @@ def main():
         help="Filter out this many base pairs from the edges of each region in regions input. (default: 0)",
     )
 
-    # mwCDR arguments
+    # CentroDip arguments
     argparser.add_argument(
         "-w",
         "--window_size",
@@ -449,13 +459,13 @@ def main():
     argparser.add_argument(
         "--stat",
         type=str,
-        default='mannwhitneyu',
+        default='ks',
         help="Statistical test to perform when determining p-value of CpG site. Options are 'mannwhitneyu', 'ks', or 't' (default: 'mannwhitneyu')",
     )
     argparser.add_argument(
         "--cdr_p",
         type=float,
-        default=0.0000000001,
+        default=1e-10,
         help="Cutoff for high confidence MDR p-value. (default: 1e-10)",
     )
     argparser.add_argument(
@@ -468,13 +478,13 @@ def main():
         "--min_sig_cpgs",
         type=int,
         default=50,
-        help="Minimum size for a region to be labelled as an MDR. (default: 50)",
+        help="Minimum size for a region to be labelled as an MDR. (default: 10)",
     )
     argparser.add_argument(
         "--merge_distance",
         type=int,
-        default=50,
-        help="Distance in bp to merge low confidence MDR annotations. (default: 50)",
+        default=25,
+        help="Distance in bp to merge low confidence MDR annotations. (default: 10)",
     )
     argparser.add_argument(
         "--enrichment",
@@ -524,19 +534,29 @@ def main():
 
     def generate_output_bed(all_chroms_dict, output_file, columns=["starts", "ends"]):
         all_lines = []
+
+        if not all_chroms_dict:
+            return
+
         for chrom in all_chroms_dict:
             chrom_data = all_chroms_dict[chrom]
-            for i in range(len(chrom_data["starts"])):
-                line = [chrom]
-                for col in columns:
-                    if col in chrom_data:
-                        line.append(str(chrom_data[col][i])) 
-                all_lines.append(line)
-                
-        all_lines = sorted(all_lines, key=lambda x: (x[0], int(x[1])))
-        with open(output_file, 'w') as file:
-            for line in all_lines: 
-                file.write("\t".join(line) + "\n")
+            if chrom_data:
+                for i in range( len(chrom_data.get("starts", [])) ):
+                    line = [chrom]
+                    for col in columns:
+                        if col in chrom_data:
+                            line.append(str(chrom_data[col][i])) 
+                    all_lines.append(line)
+
+        # if nothing is in all_lines, return nothing and don't write to file
+        if all_lines:        
+            all_lines = sorted(all_lines, key=lambda x: (x[0], int(x[1])))
+            with open(output_file, 'w') as file:
+                for line in all_lines: 
+                    file.write("\t".join(line) + "\n")
+        else:
+            return
+
 
     parse_beds = BedParser(
         mod_code=args.mod_code,
