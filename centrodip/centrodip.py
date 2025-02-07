@@ -229,7 +229,7 @@ class CentroDip:
             current_region_frac_mods = methyl_frac_mod[start_indices[i]:end_indices[i]]
 
             if self.stat == "ks":
-                statistics = stats.ks_2samp(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
+                statistics = stats.ks_2samp(methyl_frac_mod, current_region_frac_mods, alternative=alt, nan_policy="omit", method="asymp")
             elif self.stat == "t":
                 statistics = stats.ttest_ind(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
             elif "mannwhitneyu": 
@@ -311,7 +311,7 @@ class CentroDip:
                         lc_scores.extend(hc_scores)
 
                 # Add remaining low confidence region
-                if lc_scores or lc_start_idx <= mdr[-1]:
+                if lc_scores or lc_start_idx < mdr[-1]:
                     final_lc_scores = lc_scores + list(methyl_p_values[lc_start_idx:mdr[-1]+1])
                     create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", final_lc_scores, self.transition_color)
                     
@@ -322,19 +322,19 @@ class CentroDip:
         methyl_coverage = np.array(methylation["valid_coverage"], dtype=int)
 
         # find all low coverage CpGs
-        low_cov_idxs = np.where(methyl_coverage > self.min_valid_cov)[0]
+        low_cov_idxs = np.where(methyl_coverage < self.min_valid_cov)[0]
         low_cov_diff = np.diff(low_cov_idxs)
         low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
         low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
 
-        low_cov_regions = {"starts": [], "ends": []}
+        low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
             start_idx, end_idx = region[0], region[-1]
-            low_cov_regions["starts"].append(methyl_starts[start_idx])
-            low_cov_regions["ends"].append(methyl_starts[end_idx] + 1)
+            low_covs["starts"].append(methyl_starts[start_idx])
+            low_covs["ends"].append(methyl_starts[end_idx] + 1)
 
-        return low_cov_regions
+        return low_covs
 
     def remove_low_coverage(self, cdrs, low_cov_regions):
         filtered_cdrs = {
@@ -377,8 +377,8 @@ class CentroDip:
 
         if self.min_valid_cov > 1:
             low_cov_regions = self.find_low_coverage(methylation)
-            cdr = self.remove_low_coverage(cdrs, low_cov_regions)
-            return ( chrom, cdrs, low_cov_regions, methylation_pvalues)
+            filtered_cdrs = self.remove_low_coverage(cdrs, low_cov_regions)
+            return ( chrom, filtered_cdrs, low_cov_regions, methylation_pvalues)
         return ( chrom, cdrs, {}, methylation_pvalues)
 
     def centrodip_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
@@ -465,7 +465,7 @@ def main():
     argparser.add_argument(
         "--cdr_p",
         type=float,
-        default=1e-10,
+        default=1e-6,
         help="Cutoff for high confidence MDR p-value. (default: 1e-10)",
     )
     argparser.add_argument(
@@ -478,13 +478,13 @@ def main():
         "--min_sig_cpgs",
         type=int,
         default=50,
-        help="Minimum size for a region to be labelled as an MDR. (default: 10)",
+        help="Minimum size for a region to be labelled as an MDR. (default: 50)",
     )
     argparser.add_argument(
         "--merge_distance",
         type=int,
-        default=25,
-        help="Distance in bp to merge low confidence MDR annotations. (default: 10)",
+        default=50,
+        help="Distance in bp to merge low confidence MDR annotations. (default: 50)",
     )
     argparser.add_argument(
         "--enrichment",
