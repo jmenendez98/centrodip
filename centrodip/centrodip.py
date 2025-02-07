@@ -323,6 +323,10 @@ class CentroDip:
 
         # find all low coverage CpGs
         low_cov_idxs = np.where(methyl_coverage < self.min_valid_cov)[0]
+        if len(low_cov_idxs) == 0:  
+            # check if there are any low coverage indices
+            return {"starts": [], "ends": []}
+
         low_cov_diff = np.diff(low_cov_idxs)
         low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
         low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
@@ -330,9 +334,10 @@ class CentroDip:
         low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
-            start_idx, end_idx = region[0], region[-1]
-            low_covs["starts"].append(methyl_starts[start_idx])
-            low_covs["ends"].append(methyl_starts[end_idx] + 1)
+            if region.size:
+                start_idx, end_idx = region[0], region[-1]
+                low_covs["starts"].append(methyl_starts[start_idx])
+                low_covs["ends"].append(methyl_starts[end_idx] + 1)
 
         return low_covs
 
