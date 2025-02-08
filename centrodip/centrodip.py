@@ -334,7 +334,7 @@ class CentroDip:
         low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
-            if region.size:
+            if len(region) > 0:
                 start_idx, end_idx = region[0], region[-1]
                 low_covs["starts"].append(methyl_starts[start_idx])
                 low_covs["ends"].append(methyl_starts[end_idx] + 1)
