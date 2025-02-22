@@ -328,13 +328,15 @@ class CentroDip:
             return {"starts": [], "ends": []}
 
         low_cov_diff = np.diff(low_cov_idxs)
-        low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
+        low_cov_breaks = np.where(low_cov_diff > self.merge_distance)[0] + 1 
         low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
 
         low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
-            if len(region) > 0:
+            # make region only if it has more cpgs than self.min_sig_cpgs
+            lcs = [cpg for cpg in region if cpg in low_cov_idxs]
+            if len(lcs) > self.min_sig_cpgs:
                 start_idx, end_idx = region[0], region[-1]
                 low_covs["starts"].append(methyl_starts[start_idx])
                 low_covs["ends"].append(methyl_starts[end_idx] + 1)
