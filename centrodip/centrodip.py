@@ -187,6 +187,7 @@ class CentroDip:
         enrichment,
         cdr_color,
         transition_color,
+        low_coverage_color,
         threads,
         output_label,
     ):
@@ -207,6 +208,7 @@ class CentroDip:
 
         self.cdr_color = cdr_color
         self.transition_color = transition_color
+        self.low_coverage_color = low_coverage_color
 
         self.threads = threads
         self.output_label = output_label
@@ -343,40 +345,63 @@ class CentroDip:
 
         return low_covs
 
-    def remove_low_coverage(self, cdrs, low_cov_regions):
-        filtered_cdrs = {
-            "starts": cdrs["starts"].copy(),
-            "ends": cdrs["ends"].copy(),
-            "names": cdrs["names"].copy(),
-            "scores": cdrs["scores"].copy(),
-            "strands": cdrs["strands"].copy(),
-            "itemRgbs": cdrs["itemRgbs"].copy()
+    def adjust_for_low_coverage(self, cdrs, low_cov_regions):
+        adjusted_cdrs = {
+            "starts": [],
+            "ends": [],
+            "names": [],
+            "scores": [],
+            "strands": [],
+            "itemRgbs": []
         }
 
-        indices_to_remove = set()
+        i = 0
+        while i < len(cdrs["starts"]):
+            cdr_start, cdr_end = cdrs["starts"][i], cdrs["ends"][i]
+            adjusted = False
 
-        # iterate over the indices of cdrs
-        for i in range(len(filtered_cdrs["starts"])):
-            cdr_start, cdr_end = filtered_cdrs["starts"][i], filtered_cdrs["ends"][i]
-
-            # check for overlap with low coverage regions
             for j in range(len(low_cov_regions["starts"])):
                 low_cov_start, low_cov_end = low_cov_regions["starts"][j], low_cov_regions["ends"][j]
 
                 if (low_cov_start < cdr_end) and (low_cov_end > cdr_start):
-                    indices_to_remove.add(i)
+                    # CDR overlaps with low coverage region
+                    if cdr_start < low_cov_start:
+                        # add adjusted CDR before low coverage region
+                        adjusted_cdrs["starts"].append(cdr_start)
+                        adjusted_cdrs["ends"].append(low_cov_start)
+                        adjusted_cdrs["names"].append(cdrs["names"][i])
+                        adjusted_cdrs["scores"].append(cdrs["scores"][i])
+                        adjusted_cdrs["strands"].append(cdrs["strands"][i])
+                        adjusted_cdrs["itemRgbs"].append(cdrs["itemRgbs"][i])
+
+                    # add low coverage entry
+                    adjusted_cdrs["starts"].append(low_cov_start)
+                    adjusted_cdrs["ends"].append(low_cov_end)
+                    adjusted_cdrs["names"].append(f"low_coverage_region(>{self.min_valid_cov})")
+                    adjusted_cdrs["scores"].append("0")
+                    adjusted_cdrs["strands"].append(".")
+                    adjusted_cdrs["itemRgbs"].append(self.low_coverage_color)
+
+                    if cdr_end > low_cov_end:
+                        # add adjusted CDR
+                        adjusted_cdrs["starts"].append(low_cov_end)
+                        adjusted_cdrs["ends"].append(cdr_end)
+                        adjusted_cdrs["names"].append(cdrs["names"][i])
+                        adjusted_cdrs["scores"].append(cdrs["scores"][i])
+                        adjusted_cdrs["strands"].append(cdrs["strands"][i])
+                        adjusted_cdrs["itemRgbs"].append(cdrs["itemRgbs"][i])
+
+                    adjusted = True
                     break
 
-        # remove the indices marked for removal
-        for index in sorted(indices_to_remove, reverse=True):
-            filtered_cdrs["starts"].pop(index)
-            filtered_cdrs["ends"].pop(index)
-            filtered_cdrs["names"].pop(index)
-            filtered_cdrs["scores"].pop(index)
-            filtered_cdrs["strands"].pop(index)
-            filtered_cdrs["itemRgbs"].pop(index)
+            if not adjusted:
+                # If CDR doesn't overlap with any low coverage region, add it as is
+                for key in adjusted_cdrs:
+                    adjusted_cdrs[key].append(cdrs[key][i])
 
-        return filtered_cdrs
+            i += 1
+
+        return adjusted_cdrs
 
     def centrodip_single_chromosome(self, chrom, methylation, regions):
         methylation_pvalues = self.calculate_regional_stats(methylation)
@@ -384,7 +409,7 @@ class CentroDip:
 
         if self.min_valid_cov > 1:
             low_cov_regions = self.find_low_coverage(methylation)
-            filtered_cdrs = self.remove_low_coverage(cdrs, low_cov_regions)
+            filtered_cdrs = self.adjust_for_low_coverage(cdrs, low_cov_regions)
             return ( chrom, filtered_cdrs, low_cov_regions, methylation_pvalues)
         return ( chrom, cdrs, {}, methylation_pvalues)
 
@@ -516,6 +541,12 @@ def main():
     argparser.add_argument(
         "--transition_color",
         type=str,
+        default="150,150,255",
+        help='Pass flag in if you want to output all data generated throughout mwCDR process. (default: False)',
+    )
+    argparser.add_argument(
+        "--low_coverage_color",
+        type=str,
         default="150,150,150",
         help='Pass flag in if you want to output all data generated throughout mwCDR process. (default: False)',
     )
@@ -594,6 +625,7 @@ def main():
         threads=args.threads,
         cdr_color=args.cdr_color,
         transition_color=args.transition_color,
+        low_coverage_color=args.low_coverage_color,
         output_label=args.output_label,
     )
 
