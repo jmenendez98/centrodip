@@ -5,11 +5,12 @@ import os
 
 import numpy as np
 import scipy.stats as stats
+import scipy.signal as signal
 
 from typing import Dict, Optional, List, Union
 import tempfile
 
-class BedParser:
+class BedParse:
     """hmmCDR parser to read in region and methylation bed files."""
 
     def __init__(
@@ -36,7 +37,7 @@ class BedParser:
         
         self.temp_dir = tempfile.gettempdir()
 
-    def read_and_filter_regions(self, regions_path: str) -> Dict[str, Dict[str, list]]:
+    def read_and_filter_regions(self, regions_path):
         """
         Read and filter regions from a BED file.
         
@@ -53,7 +54,7 @@ class BedParser:
         if not os.path.exists(regions_path):
             raise FileNotFoundError(f"File not found: {regions_path}")
 
-        region_dict: Dict[str, Dict[str, list]] = {}
+        region_dict = {}
 
         with open(regions_path, 'r') as file:
             lines = file.readlines()
@@ -76,7 +77,7 @@ class BedParser:
 
         return region_dict
     
-    def read_and_filter_methylation(self, methylation_path: str) -> Dict[str, Dict[str, list]]:
+    def read_and_filter_methylation(self, methylation_path, region_dict):
         """
         Read and filter methylation data from a BED file.
         
@@ -94,38 +95,54 @@ class BedParser:
         if not os.path.exists(methylation_path):
             raise FileNotFoundError(f"File not found: {methylation_path}")
 
-        methylation_dict: Dict[str, Dict[str, list]] = {}
+        methylation_dict = {}
+
+        # helper function to add methylation data entries
+        def add_methylation_entry(methyl_dict, region_key, start, end, frac_mod, cov):
+            methyl_dict[region_key]["starts"].append(start)
+            methyl_dict[region_key]["ends"].append(start+1)
+            methyl_dict[region_key]["fraction_modified"].append(frac_mod)
+            methyl_dict[region_key]["valid_coverage"].append(1)
+            return methyl_dict
 
         with open(methylation_path, 'r') as file:
             lines = file.readlines()
             
             for line in lines:
-                columns = line.strip().split('\t')
+                columns = line.strip().split('\t') # split line of bed into columns
 
+                # raise errors if: 1. not enough columns, 2. too many columns in bedgraph
                 if (len(columns) < (4 if self.methyl_bedgraph else 11)):
                     raise TypeError(f"Insufficient columns in {methylation_path}. Likely incorrectly formatted.")
                 elif (self.methyl_bedgraph) and (len(columns) > 4):
                     warnings.warn(f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. Potentially incorrectly formatted bedgraph file.")
 
-                chrom = columns[0]
-                start = int(columns[1])
-                if chrom not in methylation_dict.keys():
-                    methylation_dict[chrom] = {"starts": [], "ends": [], "fraction_modified": [], "valid_coverage": []}
-                    
-                if self.methyl_bedgraph:
-                    frac_mod = float(columns[3])
-                    methylation_dict[chrom]["starts"].append(start)
-                    methylation_dict[chrom]["ends"].append(start+1)
-                    methylation_dict[chrom]["fraction_modified"].append(frac_mod)
-                    methylation_dict[chrom]["valid_coverage"].append(1)
-                elif columns[3] == self.mod_code:
-                    frac_mod = float(columns[10])
-                    valid_cov = int(columns[4])
-                    methylation_dict[chrom]["starts"].append(start)
-                    methylation_dict[chrom]["ends"].append(start+1)
-                    methylation_dict[chrom]["fraction_modified"].append(frac_mod)
-                    methylation_dict[chrom]["valid_coverage"].append(valid_cov)
-                    
+                # do not process entry if it has the wrong mod code (default: 'm')
+                if (not self.methyl_bedgraph) and (columns[3] != self.mod_code):
+                    continue
+
+                chrom = columns[0] # get chromosome
+                methylation_position = int(columns[1]) # get methlation position
+
+                # check if the methylation position is within one of the regions on the matching chromosome
+                for r_s, r_e in zip(region_dict[chrom]['starts'], region_dict[chrom]['ends']): 
+                    if (methylation_position > r_s) and (methylation_position < r_e):
+                        region_key = f'{chrom}:{r_s}-{r_e}' # make a dictionary key that is the area of that region
+
+                        if region_key not in methylation_dict.keys(): # if that key is not in methylation dictionary create it
+                            methylation_dict[region_key] = {"starts": [], "ends": [], "fraction_modified": [], "valid_coverage": []}
+
+                        # use helper to add entry into methylation dictionary
+                        methylation_dict = add_methylation_entry( 
+                            methylation_dict, 
+                            region_key, 
+                            methylation_position, 
+                            methylation_position+1, 
+                            float(columns[3]) if self.methyl_bedgraph else float(columns[10]),
+                            1 if self.methyl_bedgraph else float(columns[4])
+                        )
+                    break
+
         return methylation_dict
 
     def process_files(self, methylation_path, regions_path):
@@ -140,38 +157,10 @@ class BedParser:
             Tuple of (region_dict, filtered_methylation_dict)
         """
         region_dict = self.read_and_filter_regions(regions_path)
-        methylation_dict = self.read_and_filter_methylation(methylation_path)
+        methylation_dict = self.read_and_filter_methylation(methylation_path, region_dict)
 
-        filtered_methylation_dict = {}
+        return region_dict, methylation_dict
 
-        for chrom, regions in region_dict.items():
-            if chrom not in methylation_dict:
-                continue
-
-            methylation_data = methylation_dict[chrom]
-
-            # Vectorized overlap check
-            region_starts = np.array(regions["starts"], dtype=int)
-            region_ends = np.array(regions["ends"], dtype=int)
-            methyl_starts = np.array(methylation_data["starts"], dtype=int)
-
-            overlaps = np.zeros(len(methyl_starts), dtype=bool)
-            for region_start, region_end in zip(region_starts, region_ends):
-                for i, methyl_start in enumerate(methyl_starts):
-                    if (methyl_start < region_end) and (methyl_start >= region_start):
-                        overlaps[i] = True
-
-            if np.any(overlaps):
-                filtered_methylation_dict[chrom] = {
-                    "starts": [start for start, overlap in zip(methylation_data["starts"], overlaps) if overlap],
-                    "ends": [end for end, overlap in zip(methylation_data["ends"], overlaps) if overlap],
-                    "fraction_modified": [frac_mod for frac_mod, overlap in zip(methylation_data["fraction_modified"], overlaps) if overlap],
-                    "valid_coverage": [valid_coverage for valid_coverage, overlap in zip(methylation_data["valid_coverage"], overlaps) if overlap],
-                }
-            else: 
-                ValueError(f"No methylation data from {methylation_path} overlapping with {regions_path}.")
-
-        return region_dict, filtered_methylation_dict
 
 class CentroDip:
     def __init__(
@@ -191,7 +180,6 @@ class CentroDip:
         threads,
         output_label,
     ):
-
         self.window_size = window_size
         self.step_size = step_size
 
@@ -213,36 +201,27 @@ class CentroDip:
         self.threads = threads
         self.output_label = output_label
 
-    def calculate_regional_stats(self, methylation):
-        methyl_starts = np.array(methylation["starts"], dtype=int)
+    def smooth_methylation(self, methylation):
         methyl_frac_mod = np.array(methylation["fraction_modified"], dtype=float)
 
-        n = len(methyl_starts)
-        window_half = self.window_size // 2
-        p_values = np.ones((n, self.window_size // self.step_size))
+        # calculate the rolling mean of the fraction modified data
+        half_window = self.window_size // 2
 
-        indices = np.arange(n)
-        start_indices = np.maximum(0, indices - window_half)
-        end_indices = np.minimum(n, indices + window_half + 1)
+        frac_mod_cum_sum = np.cumsum(methyl_frac_mod)
+        rolling_avg = np.full(len(methyl_frac_mod), 100)
+        
+        for i in range(half_window, len(methyl_frac_mod) - half_window):
+            start = i - half_window
+            end = i + half_window + 1
+            rolling_avg[i] = np.mean(methyl_frac_mod[start:end])
+        
+        methylation["rolling_avg_frac_mod"] = rolling_avg
 
-        alt = "less" if not self.enrichment else "greater"
+        return methylation
 
-        for i in range(0, n, self.step_size):
-            current_region_frac_mods = methyl_frac_mod[start_indices[i]:end_indices[i]]
+    def perform_stats(self, methylation):
 
-            if self.stat == "ks":
-                statistics = stats.ks_2samp(methyl_frac_mod, current_region_frac_mods, alternative=alt, nan_policy="omit", method="asymp")
-            elif self.stat == "t":
-                statistics = stats.ttest_ind(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
-            elif "mannwhitneyu": 
-                statistics = stats.mannwhitneyu(current_region_frac_mods, methyl_frac_mod, alternative=alt, nan_policy="omit")
-            else:
-                raise ValueError(f"Invalid statistical test: {self.stat}")
-
-            for j in range(0, end_indices[i]-start_indices[i]-1):
-                p_values[i, j] = statistics[1]
-
-        methylation["p-values"] = np.median(p_values, axis=1)
+        # I need to find local minima or identify the standard deviations based on the smoothed methylation values
 
         return methylation
 
@@ -403,36 +382,47 @@ class CentroDip:
 
         return adjusted_cdrs
 
-    def centrodip_single_chromosome(self, chrom, methylation, regions):
-        methylation_pvalues = self.calculate_regional_stats(methylation)
+    def centrodip_single_chromosome(self, region, methylation):
+        methylation_smoothed = self.smooth_methylation(methylation)
+
+        methylation_pvalues = self.perform_stats(methylation_smoothed) # calculate p-values for every CpG site in a region 
+
         cdrs = self.find_cdrs(methylation_pvalues)
 
         if self.min_valid_cov > 1:
             low_cov_regions = self.find_low_coverage(methylation)
             filtered_cdrs = self.adjust_for_low_coverage(cdrs, low_cov_regions)
-            return ( chrom, filtered_cdrs, low_cov_regions, methylation_pvalues)
-        return ( chrom, cdrs, {}, methylation_pvalues)
+            return ( region, filtered_cdrs, low_cov_regions, methylation_pvalues)
+        return ( region, cdrs, {}, methylation_pvalues)
 
-    def centrodip_all_chromosomes(self, methylation_all_chroms, regions_all_chroms):
+    def centrodip_all_chromosomes(self, methylation_per_region, regions_per_chrom):
         cdrs_all_chroms, low_cov_all_chroms, methylation_pvalues_all_chroms = {}, {}, {}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
+            # extract all the regions that we want to iterate over
+            all_regions = [
+                f"{chrom}:{start}-{end}"
+                for chrom, regions in regions_per_chrom.items()
+                for start, end in zip(regions['starts'], regions['ends'])
+            ]
+
+            # launch parallized processing of regions
             futures = {
                 executor.submit(
                     self.centrodip_single_chromosome,
-                    chrom, methylation_all_chroms[chrom], regions_all_chroms[chrom],
-                ): chrom
-                for chrom in methylation_all_chroms
+                    region, methylation_per_region[region],
+                ): region
+                for region in all_regions
             }
 
             for future in concurrent.futures.as_completed(futures):
                 (
-                    chrom, cdrs, low_cov_regions, methylation_pvalues,
+                    region, cdrs, low_cov_regions, methylation_pvalues,
                 ) = future.result()
 
-                cdrs_all_chroms[chrom] = cdrs
-                low_cov_all_chroms[chrom] = low_cov_regions
-                methylation_pvalues_all_chroms[chrom] = methylation_pvalues
+                cdrs_all_chroms[region] = cdrs
+                low_cov_all_chroms[region] = low_cov_regions
+                methylation_pvalues_all_chroms[region] = methylation_pvalues
 
         return cdrs_all_chroms, low_cov_all_chroms, methylation_pvalues_all_chroms
 
@@ -447,7 +437,7 @@ def main():
     argparser.add_argument("regions", type=str, help="Path to BED file of regions")
     argparser.add_argument("output", type=str, help="Path to the output BED file")
 
-    # BedParser arguments
+    # bed parser arguments
     argparser.add_argument(
         "-m",
         "--mod_code",
@@ -570,16 +560,25 @@ def main():
         raise ValueError("Cannot pass --min_valid_cov > 1 with --methyl_bedgraph")
 
 
-    def generate_output_bed(all_chroms_dict, output_file, columns=["starts", "ends"]):
-        all_lines = []
-
-        if not all_chroms_dict:
+    def generate_output_bed(bed_dict, output_file, key_is_regions, columns=["starts", "ends"]):
+        if not bed_dict:
             return
 
-        for chrom in all_chroms_dict:
-            chrom_data = all_chroms_dict[chrom]
+        all_lines = []
+        all_keys = list(bed_dict.keys())
+
+        if key_is_regions:
+            all_chroms = [region.split(':')[0] for region in list(bed_dict.keys())]
+        else:
+            all_chroms = all_keys
+            
+        for key, chrom in zip(all_keys, all_chroms):
+            chrom_data = bed_dict[key]
+
+
+
             if chrom_data:
-                for i in range( len(chrom_data.get("starts", [])) ):
+                for i in range( len(chrom_data.get("starts", []))-1 ):
                     line = [chrom]
                     for col in columns:
                         if col in chrom_data:
@@ -596,21 +595,16 @@ def main():
             return
 
 
-    parse_beds = BedParser(
+    bed_parser = BedParse(
         mod_code=args.mod_code,
         methyl_bedgraph=args.methyl_bedgraph,
-
-        region_edge_filter=args.region_edge_filter,
+        region_edge_filter=args.region_edge_filter
     )
 
-    regions_dict, methylation_dict = parse_beds.process_files(
+    regions_per_chrom_dict, methylation_per_region_dict = bed_parser.process_files(
         methylation_path=args.bedmethyl,
-        regions_path=args.regions,
+        regions_path=args.regions
     )
-
-    if args.output_all:
-        generate_output_bed(regions_dict, f"{output_prefix}_regions.bed", columns=["starts", "ends"])
-        generate_output_bed(methylation_dict, f"{output_prefix}_region_frac_mod.bedgraph", columns=["starts", "ends", "fraction_modified"])
 
     centro_dip = CentroDip(
         window_size=args.window_size,
@@ -630,17 +624,26 @@ def main():
     )
 
     (
-        cdrs_all_chroms,
-        low_coverage_all_chroms,
-        methylation_sig_all_chroms,
-    ) = centro_dip.centrodip_all_chromosomes(methylation_all_chroms=methylation_dict, regions_all_chroms=regions_dict)
+        cdrs_per_region,
+        low_coverage_per_region,
+        methylation_sig_per_region,
+    ) = centro_dip.centrodip_all_chromosomes(methylation_per_region=methylation_per_region_dict, regions_per_chrom=regions_per_chrom_dict)
 
     if args.output_all:
-        generate_output_bed(methylation_sig_all_chroms, f"{output_prefix}_pvalues.bedgraph", columns=["starts", "ends", "p-values"])
-        generate_output_bed(low_coverage_all_chroms, f"{output_prefix}_low_cov.bed", columns=["starts", "ends"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_pvalues.bedgraph", key_is_regions=True, columns=["starts", "ends", "p-values"])
+        generate_output_bed(low_coverage_per_region, f"{output_prefix}_low_cov.bed", key_is_regions=True, columns=["starts", "ends"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_rolling_avg_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "rolling_avg_frac_mod"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_filter_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_filter_frac_mod"])
 
-    generate_output_bed(cdrs_all_chroms, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
+    generate_output_bed(cdrs_per_region, f"{args.output}", key_is_regions=True, columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
 
 
 if __name__ == "__main__":
-    main()
+    import cProfile
+    with cProfile.Profile() as profile:
+        main()
+    stats = pstats.Stats(profile)
+    stats.sort_stats(pstats.SortKey.TIME)
+    stats.print_stats()
+    
+    # main()
