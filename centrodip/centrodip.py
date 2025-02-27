@@ -4,8 +4,7 @@ import warnings
 import os
 
 import numpy as np
-import scipy.stats as stats
-import scipy.signal as signal
+import scipy
 
 from typing import Dict, Optional, List, Union
 import tempfile
@@ -124,6 +123,9 @@ class BedParse:
                 chrom = columns[0] # get chromosome
                 methylation_position = int(columns[1]) # get methlation position
 
+                if chrom not in region_dict.keys():
+                    continue
+
                 # check if the methylation position is within one of the regions on the matching chromosome
                 for r_s, r_e in zip(region_dict[chrom]['starts'], region_dict[chrom]['ends']): 
                     if (methylation_position > r_s) and (methylation_position < r_e):
@@ -168,9 +170,6 @@ class CentroDip:
         window_size,
         step_size,
         min_valid_cov,
-        stat,
-        cdr_p,
-        transition_p,
         min_sig_cpgs,
         merge_distance,
         enrichment,
@@ -184,10 +183,6 @@ class CentroDip:
         self.step_size = step_size
 
         self.min_valid_cov = min_valid_cov
-
-        self.stat = stat
-        self.cdr_p = cdr_p
-        self.transition_p = transition_p
 
         self.min_sig_cpgs = min_sig_cpgs
         self.merge_distance = merge_distance
@@ -208,7 +203,7 @@ class CentroDip:
         half_window = self.window_size // 2
 
         frac_mod_cum_sum = np.cumsum(methyl_frac_mod)
-        rolling_avg = np.full(len(methyl_frac_mod), 100)
+        rolling_avg = np.full(len(methyl_frac_mod), 100.0)
         
         for i in range(half_window, len(methyl_frac_mod) - half_window):
             start = i - half_window
@@ -219,84 +214,64 @@ class CentroDip:
 
         return methylation
 
-    def perform_stats(self, methylation):
+    def optimize_threshold(self, methylation):
+        starts = np.array(methylation["starts"], dtype=int)
+        ends = np.array(methylation["ends"], dtype=int)
 
-        # I need to find local minima or identify the standard deviations based on the smoothed methylation values
+        data = np.array(methylation["rolling_avg_frac_mod"], dtype=float)
+        fracmod = np.array(methylation["fraction_modified"], dtype=float)
+        rolling_slope = np.diff(data)
+        methylation["derivative"] = rolling_slope
 
-        return methylation
+        median = np.median(data)
+        hist, bin_edges = np.histogram(data[data < median], bins=1000)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-    def find_cdrs(self, methylation):
-        methyl_starts = np.array(methylation["starts"], dtype=int)
-        methyl_p_values = np.array(methylation["p-values"], dtype=float)
+        weighted_hist = hist * np.exp(-bin_centers * 0.1)
+        weight1 = np.cumsum(weighted_hist)
+        weight2 = np.cumsum(weighted_hist[::-1])[::-1]
 
-        # create an array to store confidence levels (0: no confidence, 1: low confidence, 2: high confidence)
-        mdr_conf = np.zeros(len(methyl_p_values), dtype=int)
-        mdr_conf = np.where(np.array(methyl_p_values) <= self.transition_p, 1, mdr_conf)
-        mdr_conf = np.where(np.array(methyl_p_values) <= self.cdr_p, 2, mdr_conf)
-        
-        mdrs = {"starts": [], "ends": [], "names": [], "scores": [], "strands": [], "itemRgbs": []}
-        
-        # helper function to add entries to the mdrs dictionary
-        def create_entry_helper(start_idx, end_idx, name, scores, color):
-            if start_idx <= end_idx:
-                mdrs["starts"].append(methyl_starts[start_idx])
-                mdrs["ends"].append(methyl_starts[end_idx] + 1)
-                mdrs["names"].append(name)
-                mdrs["scores"].append(np.median(scores))
-                mdrs["strands"].append(".")
-                mdrs["itemRgbs"].append(color)
+        mean1 = np.cumsum(weighted_hist * bin_centers) / (weight1 + 1e-10)
+        mean2 = (np.cumsum((weighted_hist * bin_centers)[::-1]) / (weight2[::-1])[::-1] + 1e-10)
 
-        # find potential MDR regions
-        potential_mdr_idxs = np.where(mdr_conf > 0)[0]
-        if len(potential_mdr_idxs) == 0:
-            return mdrs
+        variance = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
+        idx = np.argmax(variance)
+        threshold = bin_centers[idx]
 
-        potential_mdr_diff = np.diff(potential_mdr_idxs)
-        potential_mdr_breaks = np.where(potential_mdr_diff > self.merge_distance)[0] + 1 
-        potential_mdrs = np.split(potential_mdr_idxs, potential_mdr_breaks)
-        
-        for mdr in potential_mdrs:
-            # check if the region contains any high-confidence points
-            if any(mdr_conf[m]==2 for m in mdr):
-                # find high-confidence spans within this MDR
-                hc_idxs = np.where(mdr_conf[mdr] == 2)[0]
-                hc_diff = np.diff(hc_idxs)
-                hc_breaks = np.where(hc_diff > self.merge_distance)[0] + 1 
-                hc_mdrs = np.split(hc_idxs, hc_breaks)
+        return threshold
 
-                # is there any hc_mdrs with length over self.min_sig_cpgs
-                if not any(len(hc) >= self.min_sig_cpgs for hc in hc_mdrs):
-                    continue
+    def call_cdrs(self, methylation_smoothed, threshold):
+        cdrs = {
+            "starts": [],
+            "ends": [],
+            "names": [],
+            "scores": [],
+            "strands": [],
+            "itemRgbs": []
+        }
 
-                # track the start of potential low-confidence transition
-                lc_start_idx = mdr[0]
-                lc_scores = []
+        raw_data = np.array(methylation_smoothed["fraction_modified"], dtype=float)
+        smoothed_data = np.array(methylation_smoothed["rolling_avg_frac_mod"], dtype=float)
 
-                for hc in hc_mdrs: 
-                    hc_start_idx, hc_end_idx = mdr[hc[0]], mdr[hc[-1]]
-                    hc_scores = methyl_p_values[hc_start_idx:hc_end_idx+1]
+        sig_cpgs = np.where(smoothed_data < threshold)[0]
 
-                    # check if high-confidence segment has enough significant CpGs
-                    if len([idx for idx in hc_idxs if idx in hc]) >= self.min_sig_cpgs:
-                        # add low-confidence transition before high-confidence region if needed
-                        if lc_start_idx < hc_start_idx:
-                            create_entry_helper(lc_start_idx, hc_start_idx, f"transition_{self.output_label}", 
-                                                methyl_p_values[lc_start_idx:hc_start_idx], self.transition_color)
-                            lc_scores = []
+        if len(sig_cpgs) == 0:
+            return cdrs
 
-                        # add high-confidence region
-                        create_entry_helper(hc_start_idx, hc_end_idx, f"{self.output_label}", hc_scores, self.cdr_color)
-                        lc_start_idx = hc_end_idx
-                    else:
-                        # if high-confidence region is too small, add to low-confidence scores
-                        lc_scores.extend(hc_scores)
+        sig_regions = np.split(sig_cpgs, np.where(np.diff(sig_cpgs) != 1)[0] + 1)
 
-                # Add remaining low confidence region
-                if lc_scores or lc_start_idx < mdr[-1]:
-                    final_lc_scores = lc_scores + list(methyl_p_values[lc_start_idx:mdr[-1]+1])
-                    create_entry_helper(lc_start_idx, mdr[-1], f"transition_{self.output_label}", final_lc_scores, self.transition_color)
-                    
-        return mdrs
+        for region in sig_regions:
+            start = methylation_smoothed["starts"][region[0]]
+            end = methylation_smoothed["ends"][region[-1]]
+            
+            cdrs["starts"].append(start)
+            cdrs["ends"].append(end)
+            cdrs["names"].append(f"{self.output_label}")
+            cdrs["scores"].append(np.mean(raw_data[region]))
+            cdrs["strands"].append(".")
+            cdrs["itemRgbs"].append(f"{self.cdr_color}") 
+
+        return cdrs
 
     def find_low_coverage(self, methylation):
         methyl_starts = np.array(methylation["starts"], dtype=int)
@@ -385,34 +360,27 @@ class CentroDip:
     def centrodip_single_chromosome(self, region, methylation):
         methylation_smoothed = self.smooth_methylation(methylation)
 
-        methylation_pvalues = self.perform_stats(methylation_smoothed) # calculate p-values for every CpG site in a region 
-
-        cdrs = self.find_cdrs(methylation_pvalues)
+        threshold = self.optimize_threshold(methylation_smoothed)
+        cdrs = self.call_cdrs(methylation_smoothed, threshold)
 
         if self.min_valid_cov > 1:
             low_cov_regions = self.find_low_coverage(methylation)
             filtered_cdrs = self.adjust_for_low_coverage(cdrs, low_cov_regions)
-            return ( region, filtered_cdrs, low_cov_regions, methylation_pvalues)
-        return ( region, cdrs, {}, methylation_pvalues)
+            return ( region, filtered_cdrs, low_cov_regions, methylation_smoothed)
+
+        return ( region, cdrs, {}, methylation_smoothed)
 
     def centrodip_all_chromosomes(self, methylation_per_region, regions_per_chrom):
         cdrs_all_chroms, low_cov_all_chroms, methylation_pvalues_all_chroms = {}, {}, {}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
-            # extract all the regions that we want to iterate over
-            all_regions = [
-                f"{chrom}:{start}-{end}"
-                for chrom, regions in regions_per_chrom.items()
-                for start, end in zip(regions['starts'], regions['ends'])
-            ]
-
             # launch parallized processing of regions
             futures = {
                 executor.submit(
                     self.centrodip_single_chromosome,
                     region, methylation_per_region[region],
                 ): region
-                for region in all_regions
+                for region in list(methylation_per_region.keys())
             }
 
             for future in concurrent.futures.as_completed(futures):
@@ -477,24 +445,6 @@ def main():
         type=int,
         default=1,
         help="Step size for rolling window calculations of CDRs. (default: 1)",
-    )
-    argparser.add_argument(
-        "--stat",
-        type=str,
-        default='ks',
-        help="Statistical test to perform when determining p-value of CpG site. Options are 'mannwhitneyu', 'ks', or 't' (default: 'mannwhitneyu')",
-    )
-    argparser.add_argument(
-        "--cdr_p",
-        type=float,
-        default=1e-6,
-        help="Cutoff for high confidence MDR p-value. (default: 1e-10)",
-    )
-    argparser.add_argument(
-        "--transition_p",
-        type=float,
-        default=0.0,
-        help="Cutoff for low confidence MDR p-value. (default: 0.0)",
     )
     argparser.add_argument(
         "--min_sig_cpgs",
@@ -575,8 +525,6 @@ def main():
         for key, chrom in zip(all_keys, all_chroms):
             chrom_data = bed_dict[key]
 
-
-
             if chrom_data:
                 for i in range( len(chrom_data.get("starts", []))-1 ):
                     line = [chrom]
@@ -610,9 +558,6 @@ def main():
         window_size=args.window_size,
         step_size=args.step_size,
         min_valid_cov=args.min_valid_cov,
-        stat=args.stat,
-        cdr_p=args.cdr_p,
-        transition_p=args.transition_p,
         min_sig_cpgs=args.min_sig_cpgs,
         merge_distance=args.merge_distance,
         enrichment=args.enrichment,
@@ -630,10 +575,9 @@ def main():
     ) = centro_dip.centrodip_all_chromosomes(methylation_per_region=methylation_per_region_dict, regions_per_chrom=regions_per_chrom_dict)
 
     if args.output_all:
-        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_pvalues.bedgraph", key_is_regions=True, columns=["starts", "ends", "p-values"])
         generate_output_bed(low_coverage_per_region, f"{output_prefix}_low_cov.bed", key_is_regions=True, columns=["starts", "ends"])
         generate_output_bed(methylation_sig_per_region, f"{output_prefix}_rolling_avg_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "rolling_avg_frac_mod"])
-        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_filter_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_filter_frac_mod"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_derivative.bedgraph", key_is_regions=True, columns=["starts", "ends", "derivative"])
 
     generate_output_bed(cdrs_per_region, f"{args.output}", key_is_regions=True, columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
 
