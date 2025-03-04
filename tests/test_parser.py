@@ -13,7 +13,8 @@ class TestParser:
         return BedParse(
             mod_code="m",
             bedgraph=False,
-            region_edge_filter=0,
+            region_merge_distance=0,
+            region_edge_filter=0
         )
 
     def test_fake_bedfile(self, test_data_dir, bed_parser):

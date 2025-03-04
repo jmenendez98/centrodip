@@ -12,7 +12,8 @@ class TestMatrix:
         bed_parser = BedParse(
             mod_code="m",
             bedgraph=False,
-            region_edge_filter=0,
+            region_merge_distance=0,
+            region_edge_filter=0
         )
 
         bedmethyl_test = os.path.join(test_data_dir, "bedmethyl_test.bed")
