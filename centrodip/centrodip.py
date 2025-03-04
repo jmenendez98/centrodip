@@ -6,17 +6,16 @@ import os
 import numpy as np
 import scipy
 
-from typing import Dict, Optional, List, Union
 
 class BedParse:
-    """hmmCDR parser to read in region and methylation bed files."""
+    """parser to read in region and methylation bed files."""
 
     def __init__(
         self,
-        mod_code: Optional[str] = None,
-        bedgraph: bool = False,
-        region_merge_distance: int = 100000,
-        region_edge_filter: int = 0,
+        mod_code,
+        bedgraph,
+        region_merge_distance,
+        region_edge_filter,
     ):
         """
         Initialize the parser with optional filtering parameters.
@@ -118,7 +117,7 @@ class BedParse:
             methyl_dict[region_key]["starts"].append(start)
             methyl_dict[region_key]["ends"].append(start+1)
             methyl_dict[region_key]["fraction_modified"].append(frac_mod)
-            methyl_dict[region_key]["valid_coverage"].append(1)
+            methyl_dict[region_key]["valid_coverage"].append(cov)
             return methyl_dict
 
         with open(methylation_path, 'r') as file:
@@ -153,14 +152,15 @@ class BedParse:
 
                         # use helper to add entry into methylation dictionary
                         methylation_dict = add_methylation_entry( 
-                            methylation_dict, 
-                            region_key, 
-                            methylation_position, 
-                            methylation_position+1, 
-                            float(columns[3]) if self.bedgraph else float(columns[10]),
-                            1 if self.bedgraph else float(columns[4])
+                            methyl_dict=methylation_dict, 
+                            region_key=region_key, 
+                            start=methylation_position, 
+                            end=methylation_position+1, 
+                            frac_mod=float(columns[3]) if self.bedgraph else float(columns[10]),
+                            cov=1 if self.bedgraph else float(columns[4])
                         )
-                    break
+                        
+                        break # break if the methylation line is placed
 
         return methylation_dict
 
@@ -218,15 +218,39 @@ class CentroDip:
         self.label = label
 
     def smooth_methylation(self, methylation):
+        data = np.array(methylation["fraction_modified"], dtype=float)
+
         # run data through savgol filtering
-        methyl_frac_mod = np.array(methylation["fraction_modified"], dtype=float)
-        methylation["savgol_frac_mod"] = scipy.signal.savgol_filter(
-            x=methyl_frac_mod, 
+        savgol_frac_mod = scipy.signal.savgol_filter(
+            x=data,
             window_length=self.window_size, 
             polyorder=3, 
             mode='mirror'
         )
+
+        # run slopes through savgol filtering
+        savgol_first_deriv = scipy.signal.savgol_filter(
+            x=data, 
+            window_length=self.window_size, 
+            polyorder=3, 
+            mode='mirror',
+            deriv=1
+        )
+        savgol_second_deriv = scipy.signal.savgol_filter(
+            x=data, 
+            window_length=self.window_size, 
+            polyorder=3, 
+            mode='mirror',
+            deriv=2
+        )
+
+        # store values in methylation
+        methylation["savgol_frac_mod"] = savgol_frac_mod
+        methylation["savgol_first_deriv"] = savgol_first_deriv 
+        methylation["savgol_second_deriv"] = savgol_second_deriv
+
         return methylation
+
 
     def detect_dips(self, methylation):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
@@ -238,20 +262,54 @@ class CentroDip:
             dips, _ = scipy.signal.find_peaks(
                 -data,
                 height=-height_threshold, 
-                width=1,
-                distance=1,
                 prominence=prominence_threshold
             )
         else:
             dips, _ = scipy.signal.find_peaks(
                 -data,
                 height=height_threshold, 
-                width=1,
-                distance=1,
                 prominence=prominence_threshold
             )
 
+        starts = np.array(methylation["starts"], dtype=float)
+        with open('dips_test.bed', 'a') as test:
+            for dip in dips:
+                test.write(f'chr1\t{int(starts[dip])}\t{int(starts[dip]+1)}\n')
+
         return dips
+
+    def detect_edges(self, methylation, dips):
+        data = np.array(methylation["savgol_frac_mod"], dtype=float)
+        savgol_first_deriv = np.array(methylation["savgol_first_deriv"], dtype=float)
+        savgol_second_deriv = np.array(methylation["savgol_second_deriv"], dtype=float)
+
+        def detect_edge(dip, dy, ddy):
+            infl_left = np.where(np.diff(np.sign(ddy[:dip])))[0]
+            for candidate in reversed(infl_left):  # Search right-to-left
+                # Check slope sustainability
+                if dy[candidate] < 0:
+                    left_edge = candidate
+                    break
+
+            infl_right = np.where(np.diff(np.sign(ddy[dip:])))[0] + dip
+            for candidate in infl_right:
+                # Slope reversal check (dy crosses zero upwards)
+                if dy[candidate] > 0:
+                    right_edge = candidate
+                    break
+                    
+            return left_edge, right_edge
+
+        edges = []
+        for dip in dips:
+            edges.append( detect_edge(dip, dy=savgol_first_deriv, ddy=savgol_second_deriv) )
+
+        starts = np.array(methylation["starts"], dtype=float)
+        with open('deriv_test.bed', 'a') as test:
+            for edge in edges:
+                test.write(f'chr1\t{int(starts[edge[0]])}\t{int(starts[edge[1]]+1)}\n')
+
+        return
 
     def extend_dips(self, methylation, dips):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
@@ -362,7 +420,7 @@ class CentroDip:
                     ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='less', method='asymp')
                 else:
                     ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='greater', method='asymp')
-                    
+
                 if ks_result.pvalue < self.significance:
                     # add mdr region
                     add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, ks_result.pvalue, self.mdr_color)
@@ -375,32 +433,34 @@ class CentroDip:
         return mdrs
 
     def find_low_coverage(self, methylation):
-        methyl_starts = np.array(methylation["starts"], dtype=int)
-        methyl_coverage = np.array(methylation["valid_coverage"], dtype=int)
+        starts = np.array(methylation["starts"], dtype=int)
+        coverage = np.array(methylation["valid_coverage"], dtype=int)
 
         # find all low coverage CpGs
-        low_cov_idxs = np.where(methyl_coverage < self.min_cov)[0]
+        low_cov_idxs = np.where(coverage < self.min_cov)[0]
         if len(low_cov_idxs) == 0:  
             # check if there are any low coverage indices
             return {"starts": [], "ends": []}
 
         low_cov_diff = np.diff(low_cov_idxs)
-        low_cov_breaks = np.where(low_cov_diff > 3)[0] + 1 
+        low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
         low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
 
         low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
             # make region only if is > than self.min_size
-            if starts[region[-1]]-starts[region[0]] >= self.min_size:
-                start_idx, end_idx = region[0], region[-1]
-                low_covs["starts"].append(methyl_starts[start_idx])
-                low_covs["ends"].append(methyl_starts[end_idx] + 1)
+            start_idx, end_idx = region[0], region[-1]
+            start, end = starts[start_idx], starts[end_idx]+1
+            region_size = end - start
+            if region_size >= self.min_size:
+                low_covs["starts"].append(start)
+                low_covs["ends"].append(end)
 
         return low_covs
 
-    def adjust_for_low_coverage(self, cdrs, low_cov_regions):
-        adjusted_cdrs = {
+    def adjust_for_low_coverage(self, mdrs, low_cov_regions):
+        adjusted_mdrs = {
             "starts": [],
             "ends": [],
             "names": [],
@@ -410,52 +470,52 @@ class CentroDip:
         }
 
         i = 0
-        while i < len(cdrs["starts"]):
-            cdr_start, cdr_end = cdrs["starts"][i], cdrs["ends"][i]
+        while i < len(mdrs["starts"]):
+            mdr_start, mdr_end = mdrs["starts"][i], mdrs["ends"][i]
             adjusted = False
 
             for j in range(len(low_cov_regions["starts"])):
                 low_cov_start, low_cov_end = low_cov_regions["starts"][j], low_cov_regions["ends"][j]
 
-                if (low_cov_start < cdr_end) and (low_cov_end > cdr_start):
+                if (low_cov_start < mdr_end) and (low_cov_end > mdr_start):
                     # CDR overlaps with low coverage region
-                    if cdr_start < low_cov_start:
+                    if mdr_start < low_cov_start:
                         # add adjusted CDR before low coverage region
-                        adjusted_cdrs["starts"].append(cdr_start)
-                        adjusted_cdrs["ends"].append(low_cov_start)
-                        adjusted_cdrs["names"].append(cdrs["names"][i])
-                        adjusted_cdrs["scores"].append(cdrs["scores"][i])
-                        adjusted_cdrs["strands"].append(cdrs["strands"][i])
-                        adjusted_cdrs["itemRgbs"].append(cdrs["itemRgbs"][i])
+                        adjusted_mdrs["starts"].append(mdr_start)
+                        adjusted_mdrs["ends"].append(low_cov_start)
+                        adjusted_mdrs["names"].append(mdrs["names"][i])
+                        adjusted_mdrs["scores"].append(mdrs["scores"][i])
+                        adjusted_mdrs["strands"].append(mdrs["strands"][i])
+                        adjusted_mdrs["itemRgbs"].append(mdrs["itemRgbs"][i])
 
                     # add low coverage entry
-                    adjusted_cdrs["starts"].append(low_cov_start)
-                    adjusted_cdrs["ends"].append(low_cov_end)
-                    adjusted_cdrs["names"].append(f"low_coverage_region(>{self.min_cov})")
-                    adjusted_cdrs["scores"].append("0")
-                    adjusted_cdrs["strands"].append(".")
-                    adjusted_cdrs["itemRgbs"].append(self.low_cov_color)
+                    adjusted_mdrs["starts"].append(low_cov_start)
+                    adjusted_mdrs["ends"].append(low_cov_end)
+                    adjusted_mdrs["names"].append(f"low_coverage_region(>{self.min_cov})")
+                    adjusted_mdrs["scores"].append("0")
+                    adjusted_mdrs["strands"].append(".")
+                    adjusted_mdrs["itemRgbs"].append(self.low_cov_color)
 
-                    if cdr_end > low_cov_end:
+                    if mdr_end > low_cov_end:
                         # add adjusted CDR
-                        adjusted_cdrs["starts"].append(low_cov_end)
-                        adjusted_cdrs["ends"].append(cdr_end)
-                        adjusted_cdrs["names"].append(cdrs["names"][i])
-                        adjusted_cdrs["scores"].append(cdrs["scores"][i])
-                        adjusted_cdrs["strands"].append(cdrs["strands"][i])
-                        adjusted_cdrs["itemRgbs"].append(cdrs["itemRgbs"][i])
+                        adjusted_mdrs["starts"].append(low_cov_end)
+                        adjusted_mdrs["ends"].append(mdr_end)
+                        adjusted_mdrs["names"].append(mdrs["names"][i])
+                        adjusted_mdrs["scores"].append(mdrs["scores"][i])
+                        adjusted_mdrs["strands"].append(mdrs["strands"][i])
+                        adjusted_mdrs["itemRgbs"].append(mdrs["itemRgbs"][i])
 
                     adjusted = True
                     break
 
             if not adjusted:
                 # If CDR doesn't overlap with any low coverage region, add it as is
-                for key in adjusted_cdrs:
-                    adjusted_cdrs[key].append(cdrs[key][i])
+                for key in adjusted_mdrs:
+                    adjusted_mdrs[key].append(mdrs[key][i])
 
             i += 1
 
-        return adjusted_cdrs
+        return adjusted_mdrs
 
     def centrodip_single_chromosome(self, region, methylation):
         # if the region has less CpG's than the window size do not process
@@ -464,6 +524,7 @@ class CentroDip:
         methylation_smoothed = self.smooth_methylation(methylation)
 
         dips = self.detect_dips(methylation_smoothed)
+        self.detect_edges(methylation_smoothed, dips)
         dip_idxs, transition_idxs = self.extend_dips(methylation_smoothed, dips)
         mdrs = self.filter_dips(methylation_smoothed, dip_idxs, transition_idxs)
 
@@ -526,12 +587,12 @@ def main():
         "--region-merge-distance",
         type=int,
         default=10000,
-        help="Merge gaps in nearby centrodip regions up to this many base pairs. (default: 100000)",
+        help="Merge gaps in nearby centrodip regions up to this many base pairs. (default: 10000)",
     )
     argparser.add_argument(
         "--region-edge-filter",
         type=int,
-        default=10000,
+        default=0,
         help="Remove edges of merged regions in base pairs. (default: 0)",
     )
 
@@ -551,7 +612,7 @@ def main():
     argparser.add_argument(
         "--prominence-constant",
         type=float,
-        default=0.5,
+        default=0.1,
         help="Scalar factor to decide the prominence required for an MDR peak. Scalar is multiplied by smoothed data's difference in the 99th and 1st percentiles. Lower values increase leniency of MDR calls. (default: 0.5)",
     )
     argparser.add_argument(
@@ -696,18 +757,22 @@ def main():
     ) = centro_dip.centrodip_all_chromosomes(methylation_per_region=methylation_per_region_dict, regions_per_chrom=regions_per_chrom_dict)
 
     if args.output_all:
-        generate_output_bed(low_coverage_per_region, f"{output_prefix}_low_cov.bed", key_is_regions=True, columns=["starts", "ends"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_coverages.bedgraph", key_is_regions=True, columns=["starts", "ends", "valid_coverage"])
         generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_frac_mod"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_first_deriv.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_first_deriv"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_second_deriv.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_second_deriv"])
 
     generate_output_bed(mdrs_per_region, f"{args.output}", key_is_regions=True, columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
 
 
 if __name__ == "__main__":
+    '''
     import cProfile
     with cProfile.Profile() as profile:
         main()
     stats = pstats.Stats(profile)
     stats.sort_stats(pstats.SortKey.TIME)
     stats.print_stats()
+    '''
     
-    # main()
+    main()
