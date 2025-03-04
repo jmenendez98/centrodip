@@ -229,25 +229,20 @@ class CentroDip:
         )
 
         # run slopes through savgol filtering
-        savgol_first_deriv = scipy.signal.savgol_filter(
-            x=data, 
-            window_length=self.window_size, 
-            polyorder=3, 
-            mode='mirror',
-            deriv=1
-        )
-        savgol_second_deriv = scipy.signal.savgol_filter(
-            x=data, 
-            window_length=self.window_size, 
-            polyorder=3, 
-            mode='mirror',
-            deriv=2
-        )
+        half_win = self.window_size // 2
+        dy = np.gradient(savgol_frac_mod)
+        padded = np.pad(dy, (half_win, half_win), mode='edge')
+        cumsum = np.cumsum(padded)
+        rolling_sum = cumsum[self.window_size-1:] - cumsum[:-self.window_size+1]
+        rolling_dy = rolling_sum / self.window_size
+        rolling_dy = rolling_dy[half_win:-half_win]
+
+        ddy = np.gradient(rolling_dy)
 
         # store values in methylation
         methylation["savgol_frac_mod"] = savgol_frac_mod
-        methylation["savgol_first_deriv"] = savgol_first_deriv 
-        methylation["savgol_second_deriv"] = savgol_second_deriv
+        methylation["savgol_first_deriv"] = dy 
+        methylation["savgol_second_deriv"] = ddy
 
         return methylation
 
@@ -279,6 +274,7 @@ class CentroDip:
         return dips
 
     def detect_edges(self, methylation, dips):
+        '''
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
         savgol_first_deriv = np.array(methylation["savgol_first_deriv"], dtype=float)
         savgol_second_deriv = np.array(methylation["savgol_second_deriv"], dtype=float)
@@ -308,7 +304,7 @@ class CentroDip:
         with open('deriv_test.bed', 'a') as test:
             for edge in edges:
                 test.write(f'chr1\t{int(starts[edge[0]])}\t{int(starts[edge[1]]+1)}\n')
-
+        '''
         return
 
     def extend_dips(self, methylation, dips):
