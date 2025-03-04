@@ -508,7 +508,7 @@ def main():
         "--mdr-threshold",
         type=float,
         default=1,
-        help="Scalar factor to determine minimum height of an MDR. Scalar is multiplied by the smoothed data's median. Higher values decrease leniency of MDR calls. (default: 0.5)",
+        help="Number of standard deviations from the mean smoothed data to consider the minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
     )
     argparser.add_argument(
         "--prominence-constant",
@@ -520,7 +520,7 @@ def main():
         "--transition-threshold",
         type=int,
         default=0,
-        help="Scalar factor to decide the threshold of an MDR Transition call. Scalar is multiplied by smoothed data's median. (default: 1)",
+        help="Number of standard deviations from the mean smoothed data to consider the transition cutoff. (default: 0)",
     )
     argparser.add_argument(
         "--significance",
@@ -622,7 +622,6 @@ def main():
                     file.write("\t".join(line) + "\n")
         else:
             return
-
 
     bed_parser = BedParse(
         mod_code=args.mod_code,
