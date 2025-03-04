@@ -234,15 +234,24 @@ class CentroDip:
         height_threshold = np.mean(data)-(np.std(data)*self.mdr_threshold) # calculate the height threshold
         prominence_threshold = self.prominence_constant * (np.percentile(data, 99) - np.percentile(data, 1)) # calculate the prominence threshold
 
-        peaks, _ = scipy.signal.find_peaks(
-            -data,
-            height=-height_threshold, 
-            width=1,
-            distance=1,
-            prominence=prominence_threshold
-        )
+        if not self.enrichment:
+            dips, _ = scipy.signal.find_peaks(
+                -data,
+                height=-height_threshold, 
+                width=1,
+                distance=1,
+                prominence=prominence_threshold
+            )
+        else:
+            dips, _ = scipy.signal.find_peaks(
+                -data,
+                height=height_threshold, 
+                width=1,
+                distance=1,
+                prominence=prominence_threshold
+            )
 
-        return peaks
+        return dips
 
     def extend_dips(self, methylation, dips):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
@@ -256,15 +265,26 @@ class CentroDip:
         # extending based on called dips
         raw_mdrs = []
         for dip in dips:
-            left = right = dip
-            # Extend left
-            while left > 0 and data[left] < mdr_threshold:
-                left -= 1
-            # Extend right
-            while right < len(data) - 1 and data[right] < mdr_threshold:
-                right += 1
-            if left != right:
-                raw_mdrs.append((left, right))
+            if not self.enrichment:
+                left = right = dip
+                # Extend left
+                while left > 0 and data[left] < mdr_threshold:
+                    left -= 1
+                # Extend right
+                while right < len(data) - 1 and data[right] < mdr_threshold:
+                    right += 1
+                if left != right:
+                    raw_mdrs.append((left, right))
+            else:
+                left = right = dip
+                # Extend left
+                while left > 0 and data[left] > mdr_threshold:
+                    left -= 1
+                # Extend right
+                while right < len(data) - 1 and data[right] > mdr_threshold:
+                    right += 1
+                if left != right:
+                    raw_mdrs.append((left, right))
 
         # merge overlapping MDRs
         merged_mdrs = []
@@ -282,18 +302,32 @@ class CentroDip:
                     mdr_indices.append((left, right))
 
         transition_pairs = []
-        if transition_threshold > mdr_threshold:
-            for mdr_start, mdr_end in merged_mdrs:
-                # Left transition
-                t_left = mdr_start
-                while t_left > 0 and data[t_left] < transition_threshold:
-                    t_left -= 1
-                # Right transition
-                t_right = mdr_end
-                while t_right < len(data) - 1 and data[t_right] < transition_threshold:
-                    t_right += 1
-                
-                transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
+        if not self.enrichment:
+            if transition_threshold > mdr_threshold:
+                for mdr_start, mdr_end in merged_mdrs:
+                    # Left transition
+                    t_left = mdr_start
+                    while t_left > 0 and data[t_left] < transition_threshold:
+                        t_left -= 1
+                    # Right transition
+                    t_right = mdr_end
+                    while t_right < len(data) - 1 and data[t_right] < transition_threshold:
+                        t_right += 1
+                    
+                    transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
+            else:
+                if transition_threshold < mdr_threshold:
+                    for mdr_start, mdr_end in merged_mdrs:
+                        # Left transition
+                        t_left = mdr_start
+                        while t_left > 0 and data[t_left] > transition_threshold:
+                            t_left -= 1
+                        # Right transition
+                        t_right = mdr_end
+                        while t_right < len(data) - 1 and data[t_right] > transition_threshold:
+                            t_right += 1
+                        
+                        transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
 
         return [tuple(mdr) for mdr in merged_mdrs], transition_pairs
 
@@ -324,7 +358,11 @@ class CentroDip:
             # if mdr is too small skip it and its transitions
             if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
                 # use ks test to validate p-value of each site. If it is large enough
-                ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='less', method='asymp')
+                if not self.enrichment:
+                    ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='less', method='asymp')
+                else:
+                    ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='greater', method='asymp')
+                    
                 if ks_result.pvalue < self.significance:
                     # add mdr region
                     add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, ks_result.pvalue, self.mdr_color)
@@ -508,7 +546,7 @@ def main():
         "--mdr-threshold",
         type=float,
         default=1,
-        help="Number of standard deviations from the mean smoothed data to consider the minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
+        help="Number of standard deviations to be subtracted from the mean smoothed data to consider as minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
     )
     argparser.add_argument(
         "--prominence-constant",
