@@ -43,7 +43,7 @@ class TestMatrix:
             label='subCDR'
         )
 
-    def test_centrodip(self, test_data, centro_dip):
+    def test_centrodip_HG002_chrX(self, test_data, centro_dip):
         """Test making matrices"""
         (
             cdrs_per_region,
@@ -54,8 +54,13 @@ class TestMatrix:
             regions_per_chrom=test_data[0]
         )
 
+        # make sure the parsing and stuff worked
         assert isinstance(cdrs_per_region, dict)
         assert isinstance(methylation_per_region, dict)
         assert len(cdrs_per_region) == 1
         assert len(methylation_per_region) == 1
         assert len(methylation_per_region["chrX_MATERNAL:57866525-60979767"]["fraction_modified"]) == 62064
+
+        # check if correct amount of MDRs are estimated
+        assert len(cdrs_per_region["chrX_MATERNAL:57866525-60979767"]["starts"]) == 5
+        assert len(cdrs_per_region["chrX_MATERNAL:57866525-60979767"]["ends"]) == 5
