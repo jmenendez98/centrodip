@@ -6,17 +6,15 @@ import os
 import numpy as np
 import scipy
 
-from typing import Dict, Optional, List, Union
-
 class BedParse:
     """hmmCDR parser to read in region and methylation bed files."""
 
     def __init__(
         self,
-        mod_code: Optional[str] = None,
-        bedgraph: bool = False,
-        region_merge_distance: int = 100000,
-        region_edge_filter: int = 0,
+        mod_code,
+        bedgraph,
+        region_merge_distance,
+        region_edge_filter,
     ):
         """
         Initialize the parser with optional filtering parameters.
@@ -160,7 +158,7 @@ class BedParse:
                             float(columns[3]) if self.bedgraph else float(columns[10]),
                             1 if self.bedgraph else float(columns[4])
                         )
-                    break
+                        break
 
         return methylation_dict
 
@@ -375,11 +373,11 @@ class CentroDip:
         return mdrs
 
     def find_low_coverage(self, methylation):
-        methyl_starts = np.array(methylation["starts"], dtype=int)
-        methyl_coverage = np.array(methylation["valid_coverage"], dtype=int)
+        starts = np.array(methylation["starts"], dtype=int)
+        coverage = np.array(methylation["valid_coverage"], dtype=int)
 
         # find all low coverage CpGs
-        low_cov_idxs = np.where(methyl_coverage < self.min_cov)[0]
+        low_cov_idxs = np.where(coverage < self.min_cov)[0]
         if len(low_cov_idxs) == 0:  
             # check if there are any low coverage indices
             return {"starts": [], "ends": []}
@@ -394,8 +392,8 @@ class CentroDip:
             # make region only if is > than self.min_size
             if starts[region[-1]]-starts[region[0]] >= self.min_size:
                 start_idx, end_idx = region[0], region[-1]
-                low_covs["starts"].append(methyl_starts[start_idx])
-                low_covs["ends"].append(methyl_starts[end_idx] + 1)
+                low_covs["starts"].append(starts[start_idx])
+                low_covs["ends"].append(starts[end_idx] + 1)
 
         return low_covs
 
