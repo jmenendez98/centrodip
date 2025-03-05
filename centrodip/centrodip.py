@@ -383,17 +383,19 @@ class CentroDip:
             return {"starts": [], "ends": []}
 
         low_cov_diff = np.diff(low_cov_idxs)
-        low_cov_breaks = np.where(low_cov_diff > 3)[0] + 1 
+        low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
         low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
 
         low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
             # make region only if is > than self.min_size
-            if starts[region[-1]]-starts[region[0]] >= self.min_size:
-                start_idx, end_idx = region[0], region[-1]
-                low_covs["starts"].append(starts[start_idx])
-                low_covs["ends"].append(starts[end_idx] + 1)
+            start_idx, end_idx = region[0], region[-1]
+            start, end = starts[start_idx], starts[end_idx]+1
+            region_size = end - start
+            if region_size >= self.min_size:
+                low_covs["starts"].append(start)
+                low_covs["ends"].append(end)
 
         return low_covs
 
