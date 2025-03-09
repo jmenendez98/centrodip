@@ -1,6 +1,6 @@
 import os
 import pytest
-from centrodip.centrodip import BedParser
+from centrodip.centrodip import BedParse
 
 
 class TestParser:
@@ -10,9 +10,9 @@ class TestParser:
 
     @pytest.fixture
     def bed_parser(self):
-        return BedParser(
+        return BedParse(
             mod_code="m",
-            methyl_bedgraph=False,
+            bedgraph=False,
             region_edge_filter=0,
         )
 
@@ -29,7 +29,7 @@ class TestParser:
         empty_file = os.path.join(test_data_dir, "empty.bed")
 
         result1 = bed_parser.read_and_filter_regions(str(empty_file))
-        result2 = bed_parser.read_and_filter_regions(str(empty_file))
+        result2 = bed_parser.read_and_filter_methylation(str(empty_file), result1)
 
         assert len(result1) == 0
         assert len(result2) == 0
@@ -48,16 +48,20 @@ class TestParser:
     def test_bedmethyl_bedfile(self, test_data_dir, bed_parser):
         """Test basic bedmethyl reading functionality"""
         sample_bedmethyl_bed = os.path.join(test_data_dir, "bedmethyl_test.bed")
+        sample_censat_bed = os.path.join(test_data_dir, "censat_test.bed")
+
+        regions_dict = bed_parser.read_and_filter_regions(sample_censat_bed)
         results = bed_parser.read_and_filter_methylation(
-            sample_bedmethyl_bed
+            sample_bedmethyl_bed,
+            regions_dict
         )
 
-        assert list(results.keys())[0] == "chrX_MATERNAL"
+        assert list(results.keys())[0] == "chrX_MATERNAL:57866525-60979767"
         assert len(list(results.keys())) == 1
 
-        assert len(results["chrX_MATERNAL"]["starts"]) == 62064
-        assert len(results["chrX_MATERNAL"]["ends"]) == 62064
-        assert len(results["chrX_MATERNAL"]["fraction_modified"]) == 62064
+        assert len(results["chrX_MATERNAL:57866525-60979767"]["starts"]) == 62064
+        assert len(results["chrX_MATERNAL:57866525-60979767"]["ends"]) == 62064
+        assert len(results["chrX_MATERNAL:57866525-60979767"]["fraction_modified"]) == 62064
 
     def test_chrom_dict_len(self, test_data_dir, bed_parser):
         """Test basic bedmethyl reading functionality"""

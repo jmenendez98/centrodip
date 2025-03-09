@@ -1,6 +1,6 @@
 import os
 import pytest
-from centrodip.centrodip import BedParser, CentroDip
+from centrodip.centrodip import BedParse, CentroDip
 
 
 class TestMatrix:
@@ -9,9 +9,9 @@ class TestMatrix:
         """Fixture to set up test data and parser"""
         test_data_dir = os.path.join("tests", "data")
 
-        bed_parser = BedParser(
+        bed_parser = BedParse(
             mod_code="m",
-            methyl_bedgraph=False,
+            bedgraph=False,
             region_edge_filter=0,
         )
 
@@ -28,33 +28,33 @@ class TestMatrix:
         """Fixture for matrix calculator"""
         return CentroDip(
             window_size=101,
-            step_size=1,
-            min_valid_cov=1,
-            stat="mannwhitneyu",
-            cdr_p=0.0000001,
-            transition_p=0.01,
-            min_sig_cpgs=50,
-            merge_distance=50,
+            mdr_threshold=1,
+            transition_threshold=0,
+            prominence_constant=0.5,
+            significance=1e-10,
+            min_size=1000,
+            min_cov=1,
             enrichment=False,
             threads=4,
-            cdr_color="50,50,255",
-            transition_color="150,150,150",
-            output_label="subCDR",
+            mdr_color='50,50,255',
+            transition_color='150,150,255',
+            low_cov_color='211,211,211',
+            label='subCDR'
         )
 
-    def test_centro_dip(self, test_data, centro_dip):
+    def test_centrodip(self, test_data, centro_dip):
         """Test making matrices"""
         (
-            cdrs_all_chroms,
-            low_cov_all_chroms,
-            methylation_sig_all_chroms,
+            cdrs_per_region,
+            low_cov_per_region,
+            methylation_per_region,
         ) = centro_dip.centrodip_all_chromosomes(
-            regions_all_chroms=test_data[0],
-            methylation_all_chroms=test_data[1]
+            methylation_per_region=test_data[1],
+            regions_per_chrom=test_data[0]
         )
 
-        assert isinstance(cdrs_all_chroms, dict)
-        assert isinstance(methylation_sig_all_chroms, dict)
-        assert len(cdrs_all_chroms) == 1
-        assert len(methylation_sig_all_chroms) == 1
-        assert len(methylation_sig_all_chroms["chrX_MATERNAL"]["p-values"]) == 62064
+        assert isinstance(cdrs_per_region, dict)
+        assert isinstance(methylation_per_region, dict)
+        assert len(cdrs_per_region) == 1
+        assert len(methylation_per_region) == 1
+        assert len(methylation_per_region["chrX_MATERNAL:57866525-60979767"]["fraction_modified"]) == 62064
