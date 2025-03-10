@@ -5,18 +5,17 @@ import os
 
 import numpy as np
 import scipy
-
-from typing import Dict, Optional, List, Union
+import scipy
 
 class BedParse:
     """hmmCDR parser to read in region and methylation bed files."""
 
     def __init__(
         self,
-        mod_code: Optional[str] = None,
-        bedgraph: bool = False,
-        region_merge_distance: int = 100000,
-        region_edge_filter: int = 0,
+        mod_code,
+        bedgraph,
+        region_merge_distance,
+        region_edge_filter,
     ):
         """
         Initialize the parser with optional filtering parameters.
@@ -29,9 +28,13 @@ class BedParse:
         """
         self.mod_code = mod_code
         self.bedgraph = bedgraph
+        self.bedgraph = bedgraph
 
         self.region_merge_distance = region_merge_distance
+        self.region_merge_distance = region_merge_distance
         self.region_edge_filter = region_edge_filter
+
+    def read_and_filter_regions(self, regions_path):
 
     def read_and_filter_regions(self, regions_path):
         """
@@ -66,11 +69,8 @@ class BedParse:
                 if chrom not in region_dict:
                     region_dict[chrom] = {"starts": [], "ends": []}
 
-                if (end - self.region_edge_filter) < (start + self.region_edge_filter):
-                    continue
-
-                region_dict[chrom]["starts"].append(start + self.region_edge_filter)
-                region_dict[chrom]["ends"].append(end - self.region_edge_filter)
+                region_dict[chrom]["starts"].append(start)
+                region_dict[chrom]["ends"].append(end)
 
         # merge regions that are closer than self.region_merge_distance
         for chrom in region_dict:
@@ -83,8 +83,10 @@ class BedParse:
             merged_starts, merged_ends = [], []
             for start, end in sorted_regions:
                 if not merged_starts or start - merged_ends[-1] > self.region_merge_distance:
-                    merged_starts.append(start)
-                    merged_ends.append(end)
+                    if (end - self.region_edge_filter) < (start + self.region_edge_filter):
+                        continue
+                    merged_starts.append(start + self.region_edge_filter)
+                    merged_ends.append(end - self.region_edge_filter)
                 else:
                     merged_ends[-1] = max(merged_ends[-1], end)
             
@@ -118,7 +120,7 @@ class BedParse:
             methyl_dict[region_key]["starts"].append(start)
             methyl_dict[region_key]["ends"].append(start+1)
             methyl_dict[region_key]["fraction_modified"].append(frac_mod)
-            methyl_dict[region_key]["valid_coverage"].append(1)
+            methyl_dict[region_key]["valid_coverage"].append(cov)
             return methyl_dict
 
         with open(methylation_path, 'r') as file:
@@ -160,7 +162,7 @@ class BedParse:
                             float(columns[3]) if self.bedgraph else float(columns[10]),
                             1 if self.bedgraph else float(columns[4])
                         )
-                    break
+                        break
 
         return methylation_dict
 
@@ -375,27 +377,29 @@ class CentroDip:
         return mdrs
 
     def find_low_coverage(self, methylation):
-        methyl_starts = np.array(methylation["starts"], dtype=int)
-        methyl_coverage = np.array(methylation["valid_coverage"], dtype=int)
+        starts = np.array(methylation["starts"], dtype=int)
+        coverage = np.array(methylation["valid_coverage"], dtype=int)
 
         # find all low coverage CpGs
-        low_cov_idxs = np.where(methyl_coverage < self.min_cov)[0]
+        low_cov_idxs = np.where(coverage < self.min_cov)[0]
         if len(low_cov_idxs) == 0:  
             # check if there are any low coverage indices
             return {"starts": [], "ends": []}
 
         low_cov_diff = np.diff(low_cov_idxs)
-        low_cov_breaks = np.where(low_cov_diff > 3)[0] + 1 
+        low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
         low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
 
         low_covs = {"starts": [], "ends": []}
 
         for region in low_cov_regions:
             # make region only if is > than self.min_size
-            if starts[region[-1]]-starts[region[0]] >= self.min_size:
-                start_idx, end_idx = region[0], region[-1]
-                low_covs["starts"].append(methyl_starts[start_idx])
-                low_covs["ends"].append(methyl_starts[end_idx] + 1)
+            start_idx, end_idx = region[0], region[-1]
+            start, end = starts[start_idx], starts[end_idx]+1
+            region_size = end - start
+            if region_size >= self.min_size:
+                low_covs["starts"].append(start)
+                low_covs["ends"].append(end)
 
         return low_covs
 
