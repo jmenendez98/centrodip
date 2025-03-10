@@ -64,11 +64,8 @@ class BedParse:
                 if chrom not in region_dict:
                     region_dict[chrom] = {"starts": [], "ends": []}
 
-                if (end - self.region_edge_filter) < (start + self.region_edge_filter):
-                    continue
-
-                region_dict[chrom]["starts"].append(start + self.region_edge_filter)
-                region_dict[chrom]["ends"].append(end - self.region_edge_filter)
+                region_dict[chrom]["starts"].append(start)
+                region_dict[chrom]["ends"].append(end)
 
         # merge regions that are closer than self.region_merge_distance
         for chrom in region_dict:
@@ -81,8 +78,10 @@ class BedParse:
             merged_starts, merged_ends = [], []
             for start, end in sorted_regions:
                 if not merged_starts or start - merged_ends[-1] > self.region_merge_distance:
-                    merged_starts.append(start)
-                    merged_ends.append(end)
+                    if (end - self.region_edge_filter) < (start + self.region_edge_filter):
+                        continue
+                    merged_starts.append(start + self.region_edge_filter)
+                    merged_ends.append(end - self.region_edge_filter)
                 else:
                     merged_ends[-1] = max(merged_ends[-1], end)
             
@@ -116,7 +115,7 @@ class BedParse:
             methyl_dict[region_key]["starts"].append(start)
             methyl_dict[region_key]["ends"].append(start+1)
             methyl_dict[region_key]["fraction_modified"].append(frac_mod)
-            methyl_dict[region_key]["valid_coverage"].append(1)
+            methyl_dict[region_key]["valid_coverage"].append(cov)
             return methyl_dict
 
         with open(methylation_path, 'r') as file:
