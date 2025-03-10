@@ -28,13 +28,8 @@ class BedParse:
         """
         self.mod_code = mod_code
         self.bedgraph = bedgraph
-        self.bedgraph = bedgraph
-
-        self.region_merge_distance = region_merge_distance
         self.region_merge_distance = region_merge_distance
         self.region_edge_filter = region_edge_filter
-
-    def read_and_filter_regions(self, regions_path):
 
     def read_and_filter_regions(self, regions_path):
         """
@@ -707,11 +702,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import cProfile
-    with cProfile.Profile() as profile:
-        main()
-    stats = pstats.Stats(profile)
-    stats.sort_stats(pstats.SortKey.TIME)
-    stats.print_stats()
-    
-    # main()
+    main()
