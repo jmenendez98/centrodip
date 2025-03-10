@@ -555,7 +555,7 @@ def main():
     )
     argparser.add_argument(
         "--transition-threshold",
-        type=int,
+        type=float,
         default=0,
         help="Number of standard deviations from the mean smoothed data to consider the transition cutoff. (default: 0)",
     )
