@@ -241,7 +241,7 @@ class CentroDip:
             )
         else:
             dips, _ = scipy.signal.find_peaks(
-                -data,
+                data,
                 height=height_threshold, 
                 width=1,
                 distance=1,
