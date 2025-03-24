@@ -1,5 +1,5 @@
 {% set name = "centrodip" %}
-{% set version = "0.0.1-pre3" %}
+{% set version = "0.0.1-pre4" %}
 
 package:
   name: {{ name|lower }}
