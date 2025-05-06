@@ -354,12 +354,12 @@ class CentroDip:
         for i in range(len(mdr_idxs)):
             # if mdr is too small skip it and its transitions
             if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
-                add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, ks_result.pvalue, self.mdr_color)
+                add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, '.', self.mdr_color)
                 if transition_idxs:
                     for transition in transition_idxs[i]:
                         start_i, end_i = min(transition), max(transition)
                         if starts[end_i]-starts[start_i] >= self.min_size:
-                            add_region(start_i, end_i, f'transition_{self.label}', 1, self.transition_color)
+                            add_region(start_i, end_i, f'transition_{self.label}', '.', self.transition_color)
 
         return mdrs
 
