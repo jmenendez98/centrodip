@@ -347,25 +347,16 @@ class CentroDip:
             left_transition_start_i, left_transition_end_i = edge[0], edge[1]
             right_transition_start_i, right_transition_end_i = edge[2], edge[3]
             
-            # if mdr is too small skip it and its transitions
-            if mdr_size > self.min_size:
-                # use ks test to validate p-value of each site. If it is large enough
-                if not self.enrichment:
-                    ks_result = scipy.stats.ks_2samp(data, data[mdr_start_i:mdr_end_i], alternative='less', method='asymp')
-                else:
-                    ks_result = scipy.stats.ks_2samp(data, data[mdr_start_i:mdr_end_i], alternative='greater', method='asymp')
-
-                if ks_result.pvalue < self.significance:
-                    # add mdr region
-                    add_region(mdr_start_i, mdr_end_i, self.label, ks_result.pvalue, self.mdr_color)
-
-                    if (edge[0] != edge[1]) or (edge[2] != edge[3]):
-                        left_transition_size = starts[left_transition_end_i] - starts[left_transition_start_i]
-                        right_transition_size = starts[right_transition_end_i] - starts[right_transition_start_i]
-                        if left_transition_size >= self.min_size:
-                            add_region(left_transition_start_i, left_transition_end_i, f'transition_{self.label}', 1, self.transition_color)
-                        if right_transition_size >= self.min_size:
-                            add_region(right_transition_start_i, right_transition_end_i, f'transition_{self.label}', 1, self.transition_color)
+            # remove stretches of dips that are too small
+            for i in range(len(mdr_idxs)):
+                # if mdr is too small skip it and its transitions
+                if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
+                    add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, '.', self.mdr_color)
+                    if transition_idxs:
+                        for transition in transition_idxs[i]:
+                            start_i, end_i = min(transition), max(transition)
+                            if starts[end_i]-starts[start_i] >= self.min_size:
+                                add_region(start_i, end_i, f'transition_{self.label}', '.', self.transition_color)
 
         return mdrs
 
@@ -540,28 +531,22 @@ def main():
         help="Number of CpGs to include in Savitzky-Golay filtering of Fraction Modified. (default: 101)",
     )
     argparser.add_argument(
-        "--mdr-threshold",
+        "--threshold",
         type=float,
         default=1,
         help="Number of standard deviations to be subtracted from the mean smoothed data to consider as minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
     )
     argparser.add_argument(
-        "--prominence-constant",
+        "--prominence",
         type=float,
         default=0.5,
         help="Scalar factor to decide the prominence required for an MDR peak. Scalar is multiplied by smoothed data's difference in the 99th and 1st percentiles. Lower values increase leniency of MDR calls. (default: 0.5)",
     )
     argparser.add_argument(
-        "--transition-threshold",
+        "--minor-threshold",
         type=int,
         default=0,
         help="Number of standard deviations from the mean smoothed data to consider the transition threshold. (default: 0)",
-    )
-    argparser.add_argument(
-        "--significance",
-        type=float,
-        default=1e-10,
-        help="P-value threshold testing raw fraction modified of each MDR vs entire array using ks-test. MDRs with a value above this threshold are filtered out. (default: 1e-10)",
     )
     argparser.add_argument(
         "--min-size",
