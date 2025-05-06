@@ -354,20 +354,12 @@ class CentroDip:
         for i in range(len(mdr_idxs)):
             # if mdr is too small skip it and its transitions
             if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
-                # use ks test to validate p-value of each site. If it is large enough
-                if not self.enrichment:
-                    ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='less', method='asymp')
-                else:
-                    ks_result = scipy.stats.ks_2samp(rawdata, rawdata[mdr_idxs[i][0]:mdr_idxs[i][1]], alternative='greater', method='asymp')
-                    
-                if ks_result.pvalue < self.significance:
-                    # add mdr region
-                    add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, ks_result.pvalue, self.mdr_color)
-                    if transition_idxs:
-                        for transition in transition_idxs[i]:
-                            start_i, end_i = min(transition), max(transition)
-                            if starts[end_i]-starts[start_i] >= self.min_size:
-                                add_region(start_i, end_i, f'transition_{self.label}', 1, self.transition_color)
+                add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, ks_result.pvalue, self.mdr_color)
+                if transition_idxs:
+                    for transition in transition_idxs[i]:
+                        start_i, end_i = min(transition), max(transition)
+                        if starts[end_i]-starts[start_i] >= self.min_size:
+                            add_region(start_i, end_i, f'transition_{self.label}', 1, self.transition_color)
 
         return mdrs
 
@@ -542,28 +534,22 @@ def main():
         help="Number of CpGs to include in Savitzky-Golay filtering of Fraction Modified. (default: 101)",
     )
     argparser.add_argument(
-        "--mdr-threshold",
+        "--threshold",
         type=float,
         default=1,
         help="Number of standard deviations to be subtracted from the mean smoothed data to consider as minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
     )
     argparser.add_argument(
-        "--prominence-constant",
+        "--prominence",
         type=float,
         default=0.5,
         help="Scalar factor to decide the prominence required for an MDR peak. Scalar is multiplied by smoothed data's difference in the 99th and 1st percentiles. Lower values increase leniency of MDR calls. (default: 0.5)",
     )
     argparser.add_argument(
-        "--transition-threshold",
+        "--minor-threshold",
         type=float,
         default=0,
-        help="Number of standard deviations from the mean smoothed data to consider the transition cutoff. (default: 0)",
-    )
-    argparser.add_argument(
-        "--significance",
-        type=float,
-        default=1e-10,
-        help="P-value threshold testing raw fraction modified of each MDR vs entire array using ks-test. MDRs with a value above this threshold are filtered out. (default: 1e-10)",
+        help="Number of standard deviations from the mean smoothed data to consider the minor cutoff. These sites are typically heterogeneous for in their methylation properties. (default: 0)",
     )
     argparser.add_argument(
         "--min-size",
@@ -592,13 +578,13 @@ def main():
 
     # output arguments
     argparser.add_argument(
-        "--mdr-color",
+        "--color",
         type=str,
         default="50,50,255",
         help='Color of predicted MDRs. (default: 50,50,255)',
     )
     argparser.add_argument(
-        "--transition-color",
+        "--minor-color",
         type=str,
         default="150,150,255",
         help='Color of predicted MDR Transitions. (default: 150,150,255)',
