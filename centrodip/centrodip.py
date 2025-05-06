@@ -188,7 +188,6 @@ class CentroDip:
         mdr_threshold,
         transition_threshold,
         prominence_constant,
-        significance,
         min_size,
         min_cov,
         enrichment,
@@ -203,7 +202,6 @@ class CentroDip:
         self.transition_threshold = transition_threshold
         self.prominence_constant = prominence_constant
 
-        self.significance = significance
         self.min_size = min_size
 
         self.min_cov = min_cov
@@ -220,52 +218,40 @@ class CentroDip:
     def smooth_methylation(self, methylation):
         data = np.array(methylation["fraction_modified"], dtype=float)
 
-        # run data through savgol filtering
-        savgol_frac_mod = scipy.signal.savgol_filter(
-            x=data,
-            window_length=self.window_size, 
-            polyorder=3, 
-            mode='mirror',
-            deriv=0
-        )
-        dy = scipy.signal.savgol_filter(
-            x=data,
-            window_length=self.window_size, 
-            polyorder=3, 
-            mode='mirror',
-            deriv=1
-        )
-        ddy = scipy.signal.savgol_filter(
-            x=data,
-            window_length=self.window_size, 
-            polyorder=3, 
-            mode='mirror',
-            deriv=2
-        )
+        if self.window_size % 2 == 0:
+            window_size += 1
+        else:
+            window_size = self.window_size
+
+        kernel = np.ones(window_size) / window_size
+        rolling_avg = np.convolve(data, kernel, mode='same')
+
+        dy = np.gradient(data)
+        ddy = np.gradient(dy)
        
         # store values in methylation dictionary
-        methylation["savgol_frac_mod"] = savgol_frac_mod
-        methylation["first_deriv"] = dy
-        methylation["second_deriv"] = ddy
+        methylation["smoothed_frac_mod"] = rolling_avg
+        methylation["dy"] = dy
+        methylation["ddy"] = ddy
 
         return methylation
 
 
     def detect_dips(self, methylation):
-        savgol = np.array(methylation["savgol_frac_mod"], dtype=float)
+        smoothed = np.array(methylation["smoothed_frac_mod"], dtype=float)
 
-        height_threshold = np.mean(savgol)-(np.std(savgol)*self.mdr_threshold) # calculate the height threshold
-        prominence_threshold = self.prominence_constant * (np.percentile(savgol, 99) - np.percentile(savgol, 1)) # calculate the prominence threshold
+        height_threshold = np.mean(smoothed)-(np.std(smoothed)*self.mdr_threshold) # calculate the height threshold
+        prominence_threshold = self.prominence_constant * (np.percentile(smoothed, 99) - np.percentile(smoothed, 1)) # calculate the prominence threshold
 
         if not self.enrichment:
             dips, _ = scipy.signal.find_peaks(
-                -savgol,
+                -smoothed,
                 height=-height_threshold, 
                 prominence=prominence_threshold
             )
         else:
             dips, _ = scipy.signal.find_peaks(
-                -savgol,
+                smoothed,
                 height=height_threshold, 
                 prominence=prominence_threshold
             )
@@ -274,14 +260,12 @@ class CentroDip:
 
     def detect_edges(self, methylation, dips):
         data = np.array(methylation["fraction_modified"], dtype=float)
-        savgol = np.array(methylation["savgol_frac_mod"], dtype=float)
-        dy = np.array(methylation["first_deriv"], dtype=float)
-        ddy = np.array(methylation["second_deriv"], dtype=float)
+        smoothed = np.array(methylation["smoothed_frac_mod"], dtype=float)
+        dy = np.array(methylation["dy"], dtype=float)
+        ddy = np.array(methylation["ddy"], dtype=float)
 
-        mdr_threshold = np.mean(savgol)-(np.std(savgol)*self.mdr_threshold)
-        transition_threshold = np.mean(savgol)-(np.std(savgol)*self.transition_threshold)
-
-        print(mdr_threshold, transition_threshold)
+        mdr_threshold = np.mean(smoothed)-(np.std(smoothed)*self.mdr_threshold)
+        transition_threshold = np.mean(smoothed)-(np.std(smoothed)*self.transition_threshold)
 
         def find_nearest_inflection(index, direction, condition):
             step = -1 if direction == 'left' else 1
@@ -295,10 +279,10 @@ class CentroDip:
         edges = []
         for dip in dips:
             left = right = dip
-            while left > 0 and savgol[left] < mdr_threshold:
+            while left > 0 and smoothed[left] < mdr_threshold:
                 left -= 1
             left = find_nearest_inflection(left, 'left', lambda x: x < 0)
-            while right < len(savgol) - 1 and savgol[right] < mdr_threshold:
+            while right < len(smoothed) - 1 and smoothed[right] < mdr_threshold:
                 right += 1
             right = find_nearest_inflection(right, 'right', lambda x: x > 0)
 
@@ -307,11 +291,10 @@ class CentroDip:
             t_left = left       
             t_right = right
             if transition_threshold > mdr_threshold:
-                while t_left > 0 and savgol[t_left] < transition_threshold:
+                while t_left > 0 and smoothed[t_left] < transition_threshold:
                     t_left -= 1
-                while t_right < len(savgol) - 1 and savgol[t_right] < transition_threshold:
+                while t_right < len(smoothed) - 1 and smoothed[t_right] < transition_threshold:
                     t_right += 1
-                print(savgol[t_right])
 
             if left != right:
                 edges.append((t_left, left, right, t_right))
@@ -347,16 +330,8 @@ class CentroDip:
             left_transition_start_i, left_transition_end_i = edge[0], edge[1]
             right_transition_start_i, right_transition_end_i = edge[2], edge[3]
             
-            # remove stretches of dips that are too small
-            for i in range(len(mdr_idxs)):
-                # if mdr is too small skip it and its transitions
-                if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
-                    add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, '.', self.mdr_color)
-                    if transition_idxs:
-                        for transition in transition_idxs[i]:
-                            start_i, end_i = min(transition), max(transition)
-                            if starts[end_i]-starts[start_i] >= self.min_size:
-                                add_region(start_i, end_i, f'transition_{self.label}', '.', self.transition_color)
+            if mdr_size > self.min_size:
+                add_region(mdr_start_i, mdr_end_i, self.label, 0, self.mdr_color)
 
         return mdrs
 
@@ -533,13 +508,13 @@ def main():
     argparser.add_argument(
         "--threshold",
         type=float,
-        default=1,
+        default=1.5,
         help="Number of standard deviations to be subtracted from the mean smoothed data to consider as minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
     )
     argparser.add_argument(
         "--prominence",
         type=float,
-        default=0.5,
+        default=0.75,
         help="Scalar factor to decide the prominence required for an MDR peak. Scalar is multiplied by smoothed data's difference in the 99th and 1st percentiles. Lower values increase leniency of MDR calls. (default: 0.5)",
     )
     argparser.add_argument(
@@ -657,10 +632,9 @@ def main():
 
     centro_dip = CentroDip(
         window_size=args.window_size,
-        mdr_threshold=args.mdr_threshold,
-        transition_threshold=args.transition_threshold,
-        prominence_constant=args.prominence_constant,
-        significance=args.significance,
+        mdr_threshold=args.threshold,
+        transition_threshold=args.minor_threshold,
+        prominence_constant=args.prominence,
         min_size=args.min_size,
         min_cov=args.min_cov,
         enrichment=args.enrichment,
@@ -679,22 +653,12 @@ def main():
 
     if args.output_all:
         generate_output_bed(methylation_sig_per_region, f"{output_prefix}_coverages.bedgraph", key_is_regions=True, columns=["starts", "ends", "valid_coverage"])
-        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_frac_mod"])
-        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_first_deriv.bedgraph", key_is_regions=True, columns=["starts", "ends", "first_deriv"])
-        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_second_deriv.bedgraph", key_is_regions=True, columns=["starts", "ends", "second_deriv"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_smooth_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "smoothed_frac_mod"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_first_deriv.bedgraph", key_is_regions=True, columns=["starts", "ends", "dy"])
+        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_second_deriv.bedgraph", key_is_regions=True, columns=["starts", "ends", "ddy"])
 
-    print(mdrs_per_region)
     generate_output_bed(mdrs_per_region, f"{args.output}", key_is_regions=True, columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
 
 
 if __name__ == "__main__":
-    '''
-    import cProfile
-    with cProfile.Profile() as profile:
-        main()
-    stats = pstats.Stats(profile)
-    stats.sort_stats(pstats.SortKey.TIME)
-    stats.print_stats()
-    '''
-    
     main()
