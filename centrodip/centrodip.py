@@ -184,7 +184,7 @@ class CentroDip:
         window_size,
         mdr_threshold,
         transition_threshold,
-        prominence_constant,
+        prominence,
         significance,
         min_size,
         min_cov,
@@ -198,7 +198,7 @@ class CentroDip:
         self.window_size = window_size
         self.mdr_threshold = mdr_threshold
         self.transition_threshold = transition_threshold
-        self.prominence_constant = prominence_constant
+        self.prominence = prominence
 
         self.significance = significance
         self.min_size = min_size
@@ -227,9 +227,10 @@ class CentroDip:
 
     def detect_dips(self, methylation):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
+        data_range = np.max(data) - np.min(data)
 
         height_threshold = np.mean(data)-(np.std(data)*self.mdr_threshold) # calculate the height threshold
-        prominence_threshold = self.prominence_constant * (np.percentile(data, 99) - np.percentile(data, 1)) # calculate the prominence threshold
+        prominence_threshold = self.prominence * data_range # calculate the prominence threshold
 
         if not self.enrichment:
             dips, _ = scipy.signal.find_peaks(
@@ -662,7 +663,7 @@ def main():
         window_size=args.window_size,
         mdr_threshold=args.mdr_threshold,
         transition_threshold=args.transition_threshold,
-        prominence_constant=args.prominence_constant,
+        prominence=args.prominence,
         significance=args.significance,
         min_size=args.min_size,
         min_cov=args.min_cov,
