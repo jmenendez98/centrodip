@@ -182,33 +182,31 @@ class CentroDip:
     def __init__(
         self,
         window_size,
-        mdr_threshold,
-        transition_threshold,
+        threshold,
+        minor_threshold,
         prominence,
-        significance,
         min_size,
         min_cov,
         enrichment,
-        mdr_color,
-        transition_color,
+        color,
+        minor_color,
         low_cov_color,
         threads,
         label,
     ):
         self.window_size = window_size
-        self.mdr_threshold = mdr_threshold
-        self.transition_threshold = transition_threshold
+        self.threshold = threshold
+        self.minor_threshold = minor_threshold
         self.prominence = prominence
 
-        self.significance = significance
         self.min_size = min_size
 
         self.min_cov = min_cov
 
         self.enrichment = enrichment
 
-        self.mdr_color = mdr_color
-        self.transition_color = transition_color
+        self.color = color
+        self.minor_color = minor_color
         self.low_cov_color = low_cov_color
 
         self.threads = threads
@@ -229,7 +227,7 @@ class CentroDip:
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
         data_range = np.max(data) - np.min(data)
 
-        height_threshold = np.mean(data)-(np.std(data)*self.mdr_threshold) # calculate the height threshold
+        height_threshold = np.mean(data)-(np.std(data)*self.threshold) # calculate the height threshold
         prominence_threshold = self.prominence * data_range # calculate the prominence threshold
 
         if not self.enrichment:
@@ -254,8 +252,8 @@ class CentroDip:
     def extend_dips(self, methylation, dips):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
 
-        mdr_threshold = np.mean(data)-(np.std(data)*self.mdr_threshold)
-        transition_threshold = np.mean(data)-(np.std(data)*self.transition_threshold)
+        threshold = np.mean(data)-(np.std(data)*self.threshold)
+        minor_threshold = np.mean(data)-(np.std(data)*self.minor_threshold)
 
         mdr_indices = []
         transition_indices = []
@@ -266,20 +264,20 @@ class CentroDip:
             if not self.enrichment:
                 left = right = dip
                 # Extend left
-                while left > 0 and data[left] < mdr_threshold:
+                while left > 0 and data[left] < threshold:
                     left -= 1
                 # Extend right
-                while right < len(data) - 1 and data[right] < mdr_threshold:
+                while right < len(data) - 1 and data[right] < threshold:
                     right += 1
                 if left != right:
                     raw_mdrs.append((left, right))
             else:
                 left = right = dip
                 # Extend left
-                while left > 0 and data[left] > mdr_threshold:
+                while left > 0 and data[left] > threshold:
                     left -= 1
                 # Extend right
-                while right < len(data) - 1 and data[right] > mdr_threshold:
+                while right < len(data) - 1 and data[right] > threshold:
                     right += 1
                 if left != right:
                     raw_mdrs.append((left, right))
@@ -301,28 +299,28 @@ class CentroDip:
 
         transition_pairs = []
         if not self.enrichment:
-            if transition_threshold > mdr_threshold:
+            if minor_threshold > threshold:
                 for mdr_start, mdr_end in merged_mdrs:
                     # Left transition
                     t_left = mdr_start
-                    while t_left > 0 and data[t_left] < transition_threshold:
+                    while t_left > 0 and data[t_left] < minor_threshold:
                         t_left -= 1
                     # Right transition
                     t_right = mdr_end
-                    while t_right < len(data) - 1 and data[t_right] < transition_threshold:
+                    while t_right < len(data) - 1 and data[t_right] < minor_threshold:
                         t_right += 1
                     
                     transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
             else:
-                if transition_threshold < mdr_threshold:
+                if minor_threshold < threshold:
                     for mdr_start, mdr_end in merged_mdrs:
                         # Left transition
                         t_left = mdr_start
-                        while t_left > 0 and data[t_left] > transition_threshold:
+                        while t_left > 0 and data[t_left] > minor_threshold:
                             t_left -= 1
                         # Right transition
                         t_right = mdr_end
-                        while t_right < len(data) - 1 and data[t_right] > transition_threshold:
+                        while t_right < len(data) - 1 and data[t_right] > minor_threshold:
                             t_right += 1
                         
                         transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
@@ -355,12 +353,12 @@ class CentroDip:
         for i in range(len(mdr_idxs)):
             # if mdr is too small skip it and its transitions
             if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
-                add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, '.', self.mdr_color)
+                add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, '.', self.color)
                 if transition_idxs:
                     for transition in transition_idxs[i]:
                         start_i, end_i = min(transition), max(transition)
                         if starts[end_i]-starts[start_i] >= self.min_size:
-                            add_region(start_i, end_i, f'transition_{self.label}', '.', self.transition_color)
+                            add_region(start_i, end_i, f'transition_{self.label}', '.', self.minor_color)
 
         return mdrs
 
@@ -661,16 +659,15 @@ def main():
 
     centro_dip = CentroDip(
         window_size=args.window_size,
-        mdr_threshold=args.mdr_threshold,
-        transition_threshold=args.transition_threshold,
+        threshold=args.threshold,
+        minor_threshold=args.minor_threshold,
         prominence=args.prominence,
-        significance=args.significance,
         min_size=args.min_size,
         min_cov=args.min_cov,
         enrichment=args.enrichment,
         threads=args.threads,
-        mdr_color=args.mdr_color,
-        transition_color=args.transition_color,
+        color=args.mdr_color,
+        minor_color=args.minor_color,
         low_cov_color=args.low_cov_color,
         label=args.label
     )
