@@ -666,7 +666,7 @@ def main():
         min_cov=args.min_cov,
         enrichment=args.enrichment,
         threads=args.threads,
-        color=args.mdr_color,
+        color=args.color,
         minor_color=args.minor_color,
         low_cov_color=args.low_cov_color,
         label=args.label
