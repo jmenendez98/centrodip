@@ -30,16 +30,13 @@ class TestMatrix:
         return CentroDip(
             window_size=101,
             threshold=1,
-            minor_threshold=0,
             prominence=0.5,
             min_size=1000,
             min_cov=1,
             enrichment=False,
             threads=4,
             color='50,50,255',
-            minor_color='150,150,255',
-            low_cov_color='211,211,211',
-            label='subCDR'
+            label='blarg'
         )
 
     def test_centrodip(self, test_data, centro_dip):
