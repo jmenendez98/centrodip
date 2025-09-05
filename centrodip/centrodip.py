@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures
 import warnings
 import os
+import time
 
 import numpy as np
 import scipy
@@ -183,20 +184,16 @@ class CentroDip:
         self,
         window_size,
         threshold,
-        minor_threshold,
         prominence,
         min_size,
         min_cov,
         enrichment,
         color,
-        minor_color,
-        low_cov_color,
         threads,
         label,
     ):
         self.window_size = window_size
         self.threshold = threshold
-        self.minor_threshold = minor_threshold
         self.prominence = prominence
 
         self.min_size = min_size
@@ -206,8 +203,6 @@ class CentroDip:
         self.enrichment = enrichment
 
         self.color = color
-        self.minor_color = minor_color
-        self.low_cov_color = low_cov_color
 
         self.threads = threads
         self.label = label
@@ -218,117 +213,74 @@ class CentroDip:
         methylation["savgol_frac_mod"] = scipy.signal.savgol_filter(
             x=methyl_frac_mod, 
             window_length=self.window_size, 
-            polyorder=3, 
+            polyorder=2, 
             mode='mirror'
         )
+        methylation["savgol_frac_mod_dy"] = scipy.signal.savgol_filter(
+            x=methyl_frac_mod, 
+            window_length=self.window_size, 
+            polyorder=2, 
+            deriv=1,
+            mode='mirror'
+        )
+
         return methylation
 
     def detect_dips(self, methylation):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
         data_range = np.max(data) - np.min(data)
 
-        height_threshold = np.mean(data)-(np.std(data)*self.threshold) # calculate the height threshold
-        prominence_threshold = self.prominence * data_range # calculate the prominence threshold
+        height_threshold = np.mean(data)-(np.std(data)*self.threshold)          # calculate the height threshold
+        prominence_threshold = self.prominence * data_range                     # calculate the prominence threshold
 
         if not self.enrichment:
             dips, _ = scipy.signal.find_peaks(
                 -data,
                 height=-height_threshold, 
-                width=1,
-                distance=1,
-                prominence=prominence_threshold
+                prominence=prominence_threshold,
+                wlen=(len(data))
             )
         else:
             dips, _ = scipy.signal.find_peaks(
                 data,
                 height=height_threshold, 
-                width=1,
-                distance=1,
-                prominence=prominence_threshold
+                prominence=prominence_threshold,
+                wlen=(len(data))
             )
 
         return dips
 
     def extend_dips(self, methylation, dips):
         data = np.array(methylation["savgol_frac_mod"], dtype=float)
+        dy = np.array(methylation["savgol_frac_mod_dy"], dtype=float)
+        median = np.median(data)
 
-        threshold = np.mean(data)-(np.std(data)*self.threshold)
-        minor_threshold = np.mean(data)-(np.std(data)*self.minor_threshold)
+        mask = data > median if self.enrichment else data < median              # mask out invalid values
+        prev = np.r_[False, mask[:-1]]
+        next_ = np.r_[mask[1:], False]
+        starts = np.flatnonzero(mask & ~prev)
+        ends = np.flatnonzero(mask & ~next_)
+        lefts = np.maximum(starts - 1, 0)                                       # safe finding of right/left index
+        rights = np.minimum(ends + 1, data.size - 1)
+        dips_arr = np.asarray(list(dips), dtype=int)                            # np array of dips
+        idx = np.searchsorted(starts, dips_arr, side="right") - 1
+        valid = (idx >= 0)
+        valid &= mask[dips_arr]
+        valid &= dips_arr <= ends[idx.clip(min=0)]                              # safe gather
+        idx = idx[valid]
+        dip_bounds = [(int(lefts[i]), int(rights[i])) for i in idx]
 
-        mdr_indices = []
-        transition_indices = []
+        # trim dip calls - set the edge to be where the slope is the most prominent, while within the bounds
+        dip_bounds_adj = []
+        for d, (l, r) in zip(dips, dip_bounds):
+            l_adj = int( np.argmin(dy[range(l, d+1)]) + l )
+            r_adj = int( np.argmax(dy[range(d, r+1)]) + d )
+            dip_bounds_adj.append((l_adj, r_adj))
 
-        # extending based on called dips
-        raw_mdrs = []
-        for dip in dips:
-            if not self.enrichment:
-                left = right = dip
-                # Extend left
-                while left > 0 and data[left] < threshold:
-                    left -= 1
-                # Extend right
-                while right < len(data) - 1 and data[right] < threshold:
-                    right += 1
-                if left != right:
-                    raw_mdrs.append((left, right))
-            else:
-                left = right = dip
-                # Extend left
-                while left > 0 and data[left] > threshold:
-                    left -= 1
-                # Extend right
-                while right < len(data) - 1 and data[right] > threshold:
-                    right += 1
-                if left != right:
-                    raw_mdrs.append((left, right))
+        return dip_bounds_adj
 
-        # merge overlapping MDRs
-        merged_mdrs = []
-        for start, end in sorted(raw_mdrs, key=lambda x: x[0]):
-            if not merged_mdrs:
-                merged_mdrs.append([start, end])
-            else:
-                last_end = merged_mdrs[-1][1]
-                if start <= last_end:  # Overlapping or adjacent
-                    merged_mdrs[-1][1] = max(last_end, end)
-                else:
-                    merged_mdrs.append([start, end])
-
-                if left != right:
-                    mdr_indices.append((left, right))
-
-        transition_pairs = []
-        if not self.enrichment:
-            if minor_threshold > threshold:
-                for mdr_start, mdr_end in merged_mdrs:
-                    # Left transition
-                    t_left = mdr_start
-                    while t_left > 0 and data[t_left] < minor_threshold:
-                        t_left -= 1
-                    # Right transition
-                    t_right = mdr_end
-                    while t_right < len(data) - 1 and data[t_right] < minor_threshold:
-                        t_right += 1
-                    
-                    transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
-            else:
-                if minor_threshold < threshold:
-                    for mdr_start, mdr_end in merged_mdrs:
-                        # Left transition
-                        t_left = mdr_start
-                        while t_left > 0 and data[t_left] > minor_threshold:
-                            t_left -= 1
-                        # Right transition
-                        t_right = mdr_end
-                        while t_right < len(data) - 1 and data[t_right] > minor_threshold:
-                            t_right += 1
-                        
-                        transition_pairs.append(((t_left, mdr_start), (mdr_end, t_right)))
-
-        return [tuple(mdr) for mdr in merged_mdrs], transition_pairs
-
-    def filter_dips(self, methylation, mdr_idxs, transition_idxs):
-        mdrs = {
+    def filter_dips(self, methylation, idxs):
+        dip_calls = {
             "starts": [],
             "ends": [],
             "names": [],
@@ -337,115 +289,21 @@ class CentroDip:
             "itemRgbs": []
         }
 
-        rawdata = np.array(methylation["fraction_modified"], dtype=float)
-        data = np.array(methylation["savgol_frac_mod"], dtype=float)
         starts = np.array(methylation["starts"], dtype=int)
 
-        def add_region(start_i, end_i, name, score, color):
-            mdrs["starts"].append(starts[start_i])
-            mdrs["ends"].append(starts[end_i]+1)
-            mdrs["names"].append(f"{name}")
-            mdrs["scores"].append(score)
-            mdrs["strands"].append(".")
-            mdrs["itemRgbs"].append(f"{color}")
+        # remove dip calls that are too small
+        for i in range(len(idxs)):
+            li, ri = idxs[i][0], idxs[i][1]
+            lp, rp = starts[li], starts[ri]+1
+            if abs(starts[li]-starts[ri]+1) >= self.min_size:
+                dip_calls["starts"].append(lp)
+                dip_calls["ends"].append(rp)
+                dip_calls["names"].append(f"{self.label}")
+                dip_calls["scores"].append(1)
+                dip_calls["strands"].append(".")
+                dip_calls["itemRgbs"].append(f"{self.color}")
 
-        # remove stretches of dips that are too small
-        for i in range(len(mdr_idxs)):
-            # if mdr is too small skip it and its transitions
-            if starts[mdr_idxs[i][1]]-starts[mdr_idxs[i][0]] > self.min_size:
-                add_region(mdr_idxs[i][0], mdr_idxs[i][1], self.label, '.', self.color)
-                if transition_idxs:
-                    for transition in transition_idxs[i]:
-                        start_i, end_i = min(transition), max(transition)
-                        if starts[end_i]-starts[start_i] >= self.min_size:
-                            add_region(start_i, end_i, f'transition_{self.label}', '.', self.minor_color)
-
-        return mdrs
-
-    def find_low_coverage(self, methylation):
-        starts = np.array(methylation["starts"], dtype=int)
-        coverage = np.array(methylation["valid_coverage"], dtype=int)
-
-        # find all low coverage CpGs
-        low_cov_idxs = np.where(coverage < self.min_cov)[0]
-        if len(low_cov_idxs) == 0:  
-            # check if there are any low coverage indices
-            return {"starts": [], "ends": []}
-
-        low_cov_diff = np.diff(low_cov_idxs)
-        low_cov_breaks = np.where(low_cov_diff > 1)[0] + 1 
-        low_cov_regions = np.split(low_cov_idxs, low_cov_breaks)
-
-        low_covs = {"starts": [], "ends": []}
-
-        for region in low_cov_regions:
-            # make region only if is > than self.min_size
-            start_idx, end_idx = region[0], region[-1]
-            start, end = starts[start_idx], starts[end_idx]+1
-            region_size = end - start
-            if region_size >= self.min_size:
-                low_covs["starts"].append(start)
-                low_covs["ends"].append(end)
-
-        return low_covs
-
-    def adjust_for_low_coverage(self, cdrs, low_cov_regions):
-        adjusted_cdrs = {
-            "starts": [],
-            "ends": [],
-            "names": [],
-            "scores": [],
-            "strands": [],
-            "itemRgbs": []
-        }
-
-        i = 0
-        while i < len(cdrs["starts"]):
-            cdr_start, cdr_end = cdrs["starts"][i], cdrs["ends"][i]
-            adjusted = False
-
-            for j in range(len(low_cov_regions["starts"])):
-                low_cov_start, low_cov_end = low_cov_regions["starts"][j], low_cov_regions["ends"][j]
-
-                if (low_cov_start < cdr_end) and (low_cov_end > cdr_start):
-                    # CDR overlaps with low coverage region
-                    if cdr_start < low_cov_start:
-                        # add adjusted CDR before low coverage region
-                        adjusted_cdrs["starts"].append(cdr_start)
-                        adjusted_cdrs["ends"].append(low_cov_start)
-                        adjusted_cdrs["names"].append(cdrs["names"][i])
-                        adjusted_cdrs["scores"].append(cdrs["scores"][i])
-                        adjusted_cdrs["strands"].append(cdrs["strands"][i])
-                        adjusted_cdrs["itemRgbs"].append(cdrs["itemRgbs"][i])
-
-                    # add low coverage entry
-                    adjusted_cdrs["starts"].append(low_cov_start)
-                    adjusted_cdrs["ends"].append(low_cov_end)
-                    adjusted_cdrs["names"].append(f"low_coverage_region(>{self.min_cov})")
-                    adjusted_cdrs["scores"].append("0")
-                    adjusted_cdrs["strands"].append(".")
-                    adjusted_cdrs["itemRgbs"].append(self.low_cov_color)
-
-                    if cdr_end > low_cov_end:
-                        # add adjusted CDR
-                        adjusted_cdrs["starts"].append(low_cov_end)
-                        adjusted_cdrs["ends"].append(cdr_end)
-                        adjusted_cdrs["names"].append(cdrs["names"][i])
-                        adjusted_cdrs["scores"].append(cdrs["scores"][i])
-                        adjusted_cdrs["strands"].append(cdrs["strands"][i])
-                        adjusted_cdrs["itemRgbs"].append(cdrs["itemRgbs"][i])
-
-                    adjusted = True
-                    break
-
-            if not adjusted:
-                # If CDR doesn't overlap with any low coverage region, add it as is
-                for key in adjusted_cdrs:
-                    adjusted_cdrs[key].append(cdrs[key][i])
-
-            i += 1
-
-        return adjusted_cdrs
+        return dip_calls
 
     def centrodip_single_chromosome(self, region, methylation):
         # if the region has less CpG's than the window size do not process
@@ -453,19 +311,14 @@ class CentroDip:
             return ( region, {}, {}, {} )
         methylation_smoothed = self.smooth_methylation(methylation)
 
-        dips = self.detect_dips(methylation_smoothed)
-        dip_idxs, transition_idxs = self.extend_dips(methylation_smoothed, dips)
-        mdrs = self.filter_dips(methylation_smoothed, dip_idxs, transition_idxs)
+        dip_sites = self.detect_dips(methylation_smoothed)
+        dip_idxs = self.extend_dips(methylation_smoothed, dip_sites)
+        dips = self.filter_dips(methylation_smoothed, dip_idxs)
 
-        if self.min_cov > 1:
-            low_cov_regions = self.find_low_coverage(methylation)
-            mdrs = self.adjust_for_low_coverage(mdrs, low_cov_regions)
-            return ( region, mdrs, low_cov_regions, methylation_smoothed)
-
-        return ( region, mdrs, {}, methylation_smoothed)
+        return ( region, dips, methylation_smoothed)
 
     def centrodip_all_chromosomes(self, methylation_per_region, regions_per_chrom):
-        mdrs_all_chroms, low_cov_all_chroms, methylation_all_chroms = {}, {}, {}
+        dips_all_chroms, methylation_all_chroms = {}, {}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
             # launch parallized processing of regions
@@ -479,14 +332,13 @@ class CentroDip:
 
             for future in concurrent.futures.as_completed(futures):
                 (
-                    region, mdrs, low_cov_regions, methylation_pvalues,
+                    region, mdrs, methylation_pvalues,
                 ) = future.result()
 
-                mdrs_all_chroms[region] = mdrs
-                low_cov_all_chroms[region] = low_cov_regions
+                dips_all_chroms[region] = mdrs
                 methylation_all_chroms[region] = methylation_pvalues
 
-        return mdrs_all_chroms, low_cov_all_chroms, methylation_all_chroms
+        return dips_all_chroms, methylation_all_chroms
 
 
 def main():
@@ -536,43 +388,31 @@ def main():
         "--threshold",
         type=float,
         default=1,
-        help="Number of standard deviations to be subtracted from the mean smoothed data to consider as minimum MDR height. Lower values increase leniency of MDR calls. (default: 1)",
+        help="Number of standard deviations from the smoothed mean to be the minimum dip. Lower values increase leniency of dip calls. (default: 1)",
     )
     argparser.add_argument(
         "--prominence",
         type=float,
-        default=0.5,
-        help="Scalar factor to decide the prominence required for an MDR peak. Scalar is multiplied by smoothed data's difference in the 99th and 1st percentiles. Lower values increase leniency of MDR calls. (default: 0.5)",
-    )
-    argparser.add_argument(
-        "--minor-threshold",
-        type=float,
-        default=0,
-        help="Number of standard deviations from the mean smoothed data to consider the minor cutoff. These sites are typically heterogeneous for in their methylation properties. (default: 0)",
+        default=0.66,
+        help="Scalar factor to decide the prominence required for an dip. Scalar is multiplied by smoothed data's difference in the minimum and maxiumum values. Lower values increase leniency of MDR calls. (default: 0.66)",
     )
     argparser.add_argument(
         "--min-size",
         type=int,
-        default=1000,
-        help="Minimum MDR or Transition size in base pairs. Smaller MDR/Transitions are filtered out. (default: 2500)",
-    )
-    argparser.add_argument(
-        "--min-cov",
-        type=int,
-        default=1,
-        help="Minimum valid coverage (read from bedmethyl) required to call MDR site. Ignored if bedmethyl input is a bedgraph. (default: 1)",
+        default=5000,
+        help="Minimum dip size in base pairs. Small dips are removed. (default: 5000)",
     )
     argparser.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
-        help="Use centrodip to find areas of enriched methylation. (default: False)",
+        help="Use centrodip to find areas enriched in aggregated methylation calls. (default: False)",
     )
     argparser.add_argument(
         "--threads",
         type=int,
         default=4,
-        help='Number of workers to use for parallelization. (default: 4)',
+        help='Number of workers. (default: 4)',
     )
 
     # output arguments
@@ -580,19 +420,7 @@ def main():
         "--color",
         type=str,
         default="50,50,255",
-        help='Color of predicted MDRs. (default: 50,50,255)',
-    )
-    argparser.add_argument(
-        "--minor-color",
-        type=str,
-        default="150,150,255",
-        help='Color of predicted MDR Transitions. (default: 150,150,255)',
-    )
-    argparser.add_argument(
-        "--low-cov-color",
-        type=str,
-        default="211,211,211",
-        help='Color of low coverage regions. (default: 211,211,211)',
+        help='Color of predicted dips. (default: 50,50,255)',
     )
     argparser.add_argument(
         "--output-all",
@@ -603,8 +431,8 @@ def main():
     argparser.add_argument(
         "--label",
         type=str,
-        default="MDR",
-        help='Label to use for regions in BED output. (default: "MDR")',
+        default="CDR",
+        help='Label to use for regions in BED output. (default: "CDR")',
     )
 
     args = argparser.parse_args()
@@ -612,38 +440,6 @@ def main():
 
     if args.bedgraph and args.min_cov > 1:
         raise ValueError("Cannot pass --min-cov > 1 with --bedgraph")
-
-    def generate_output_bed(bed_dict, output_file, key_is_regions, columns=["starts", "ends"]):
-        if not bed_dict:
-            return
-
-        all_lines = []
-        all_keys = list(bed_dict.keys())
-
-        if key_is_regions:
-            all_chroms = [region.split(':')[0] for region in list(bed_dict.keys())]
-        else:
-            all_chroms = all_keys
-            
-        for key, chrom in zip(all_keys, all_chroms):
-            chrom_data = bed_dict[key]
-
-            if chrom_data:
-                for i in range( len(chrom_data.get("starts", []))-1 ):
-                    line = [chrom]
-                    for col in columns:
-                        if col in chrom_data:
-                            line.append(str(chrom_data[col][i])) 
-                    all_lines.append(line)
-
-        # if nothing is in all_lines, return nothing and don't write to file
-        if all_lines:        
-            all_lines = sorted(all_lines, key=lambda x: (x[0], int(x[1])))
-            with open(output_file, 'w') as file:
-                for line in all_lines: 
-                    file.write("\t".join(line) + "\n")
-        else:
-            return
 
     bed_parser = BedParse(
         mod_code=args.mod_code,
@@ -660,29 +456,52 @@ def main():
     centro_dip = CentroDip(
         window_size=args.window_size,
         threshold=args.threshold,
-        minor_threshold=args.minor_threshold,
         prominence=args.prominence,
         min_size=args.min_size,
-        min_cov=args.min_cov,
+        min_cov=1,
         enrichment=args.enrichment,
         threads=args.threads,
         color=args.color,
-        minor_color=args.minor_color,
-        low_cov_color=args.low_cov_color,
         label=args.label
     )
 
     (
         mdrs_per_region,
-        low_coverage_per_region,
-        methylation_sig_per_region,
+        methylation_per_region
     ) = centro_dip.centrodip_all_chromosomes(methylation_per_region=methylation_per_region_dict, regions_per_chrom=regions_per_chrom_dict)
 
-    if args.output_all:
-        generate_output_bed(low_coverage_per_region, f"{output_prefix}_low_cov.bed", key_is_regions=True, columns=["starts", "ends"])
-        generate_output_bed(methylation_sig_per_region, f"{output_prefix}_savgol_frac_mod.bedgraph", key_is_regions=True, columns=["starts", "ends", "savgol_frac_mod"])
+    def generate_output_bed(bed_dict, output_file, columns=["starts", "ends"]):
+        if not bed_dict:
+            return
 
-    generate_output_bed(mdrs_per_region, f"{args.output}", key_is_regions=True, columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
+        lines = []
+        keys = list(bed_dict.keys())
+        chroms = [region.split(':')[0] for region in list(bed_dict.keys())]
+            
+        for key, chrom in zip(keys, chroms):
+            chrom_data = bed_dict[key]
+
+            if chrom_data:
+                for i in range( len(chrom_data.get("starts", [])) ):
+                    line = [chrom]
+                    for col in columns:
+                        if col in chrom_data:
+                            line.append(str(chrom_data[col][i])) 
+                    lines.append(line)
+
+        # if nothing is in all_lines, return nothing and don't write to file
+        if lines:        
+            lines = sorted(lines, key=lambda x: (x[0], int(x[1])))
+            with open(output_file, 'w') as file:
+                for line in lines: 
+                    file.write("\t".join(line) + "\n")
+        else:
+            return
+
+    if args.output_all:
+        generate_output_bed(methylation_per_region, f"{output_prefix}_savgol_frac_mod.bedgraph", columns=["starts", "ends", "savgol_frac_mod"])
+
+    generate_output_bed(mdrs_per_region, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
 
 
 if __name__ == "__main__":
