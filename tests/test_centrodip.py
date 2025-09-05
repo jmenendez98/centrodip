@@ -43,7 +43,6 @@ class TestMatrix:
         """Test making matrices"""
         (
             cdrs_per_region,
-            low_cov_per_region,
             methylation_per_region,
         ) = centro_dip.centrodip_all_chromosomes(
             methylation_per_region=test_data[1],
