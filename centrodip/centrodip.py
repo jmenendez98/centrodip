@@ -368,12 +368,12 @@ def main():
         "--region-merge-distance",
         type=int,
         default=10000,
-        help="Merge gaps in nearby centrodip regions up to this many base pairs. (default: 100000)",
+        help="Merge gaps in nearby centrodip regions up to this many base pairs. (default: 10000)",
     )
     argparser.add_argument(
         "--region-edge-filter",
         type=int,
-        default=10000,
+        default=0,
         help="Remove edges of merged regions in base pairs. (default: 0)",
     )
 
