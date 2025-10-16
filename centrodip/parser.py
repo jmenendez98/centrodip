@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
@@ -144,6 +146,22 @@ class Parser:
                 entry["valid_coverage"].append(1 if self.bedgraph else float(columns[4]))
 
         return {region: dict(values) for region, values in methylation_dict.items()}
+
+    def process_files(self, methylation_path, regions_path):
+        """
+        Process and intersect methylation and regions files.
+        
+        Args:
+            methylation_path: Path to methylation BED file
+            regions_path: Path to regions BED file
+            
+        Returns:
+            Tuple of (region_dict, filtered_methylation_dict)
+        """
+        region_dict = self.read_and_filter_regions(regions_path)
+        methylation_dict = self.read_and_filter_methylation(methylation_path, region_dict)
+
+        return region_dict, methylation_dict
 
     def process_files(self, methylation_path, regions_path):
         """
