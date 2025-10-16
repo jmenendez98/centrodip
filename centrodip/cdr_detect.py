@@ -1,12 +1,9 @@
 import argparse
 import concurrent.futures
-import warnings
 import os
-import time
 
 import numpy as np
 import scipy
-
 
 class Dip_Detector:
     def __init__(
@@ -146,19 +143,33 @@ class Dip_Detector:
     def centrodip_all_chromosomes(self, methylation_per_region, regions_per_chrom):
         dips_all_chroms, methylation_all_chroms = {}, {}
 
+        regions = list(methylation_per_region.keys())
+        if not regions:
+            return dips_all_chroms, methylation_all_chroms
+
+        if self.threads <= 1 or len(regions) == 1:
+            for region in regions:
+                region, mdrs, methylation_pvalues = self.centrodip_single_chromosome(
+                    region, methylation_per_region[region]
+                )
+                dips_all_chroms[region] = mdrs
+                methylation_all_chroms[region] = methylation_pvalues
+            return dips_all_chroms, methylation_all_chroms
+
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
-            # launch parallized processing of regions
             futures = {
                 executor.submit(
                     self.centrodip_single_chromosome,
-                    region, methylation_per_region[region],
-                ): region
-                for region in list(methylation_per_region.keys())
-            }
+                    region,
+                    methylation_per_region[region],
+                ): region for region in regions
+            }    
 
             for future in concurrent.futures.as_completed(futures):
-                (
-                    region, mdrs, methylation_pvalues,
+                (    
+                    region,
+                    mdrs,
+                    methylation_pvalues,
                 ) = future.result()
 
                 dips_all_chroms[region] = mdrs

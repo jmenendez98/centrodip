@@ -1,14 +1,10 @@
-import argparse
-import concurrent.futures
+from bisect import bisect_right
+from collections import defaultdict
+from pathlib import Path
 import warnings
-import os
-import time
-
-import numpy as np
-
 
 class Parser:
-    """hmmCDR parser to read in region and methylation bed files."""
+    """Parser to read in region and methylation bed files for centrodip."""
 
     def __init__(
         self,
@@ -34,141 +30,127 @@ class Parser:
     def read_and_filter_regions(self, regions_path):
         """
         Read and filter regions from a BED file.
-        
         Args:
             regions_path: Path to the regions BED file
-            
         Returns:
             Dictionary mapping chromosomes to their start/end positions
-            
         Raises:
             FileNotFoundError: If regions_path doesn't exist
             TypeError: If BED file is incorrectly formatted
         """
-        if not os.path.exists(regions_path):
+
+        regions_path = Path(regions_path)
+        if not regions_path.exists():
             raise FileNotFoundError(f"File not found: {regions_path}")
 
-        region_dict = {}
+        region_dict: dict[str, dict[str, list[int]]] = defaultdict(lambda: {"starts": [], "ends": []})
 
-        with open(regions_path, 'r') as file:
-            lines = file.readlines()
-            
-            if any(len(line.strip().split("\t")) < 3 for line in lines):
-                raise TypeError(f"Less than 3 columns in {regions_path}. Likely incorrectly formatted bed file.")
-
-            for line in lines:
-                columns = line.strip().split("\t")
+        with regions_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                columns = line.rstrip("\n").split("\t")
+                if len(columns) < 3:
+                    raise TypeError(
+                        f"Less than 3 columns in {regions_path}. Likely incorrectly formatted bed file."
+                    )
                 chrom = columns[0]
                 start, end = int(columns[1]), int(columns[2])
-
-                if chrom not in region_dict:
-                    region_dict[chrom] = {"starts": [], "ends": []}
-
                 region_dict[chrom]["starts"].append(start)
                 region_dict[chrom]["ends"].append(end)
 
-        # merge regions that are closer than self.region_merge_distance
-        for chrom in region_dict:
-            starts = region_dict[chrom]["starts"]
-            ends = region_dict[chrom]["ends"]
-            
-            # sort regions by start position
-            sorted_regions = sorted(zip(starts, ends))
-            
-            merged_starts, merged_ends = [], []
+        merged_regions: dict[str, dict[str, list[int]]] = {}
+        for chrom, coords in region_dict.items():
+            sorted_regions = sorted(zip(coords["starts"], coords["ends"]))
+
+            merged_starts: list[int] = []
+            merged_ends: list[int] = []
             for start, end in sorted_regions:
                 if not merged_starts or start - merged_ends[-1] > self.region_merge_distance:
-                    if (end - self.region_edge_filter) < (start + self.region_edge_filter):
+                    trimmed_start = start + self.region_edge_filter
+                    trimmed_end = end - self.region_edge_filter
+                    if trimmed_end <= trimmed_start:
                         continue
-                    merged_starts.append(start + self.region_edge_filter)
-                    merged_ends.append(end - self.region_edge_filter)
+                    merged_starts.append(trimmed_start)
+                    merged_ends.append(trimmed_end)
                 else:
-                    merged_ends[-1] = max(merged_ends[-1], end)
-            
-            region_dict[chrom]["starts"] = merged_starts
-            region_dict[chrom]["ends"] = merged_ends
+                    merged_ends[-1] = max(merged_ends[-1], end - self.region_edge_filter)
 
-        return region_dict
+            merged_regions[chrom] = {"starts": merged_starts, "ends": merged_ends}
+
+        return merged_regions
     
     def read_and_filter_methylation(self, methylation_path, region_dict):
         """
         Read and filter methylation data from a BED file.
-        
         Args:
             methylation_path: Path to the methylation BED file
-            
         Returns:
             Dictionary mapping chromosomes to their methylation data
-            
         Raises:
             FileNotFoundError: If methylation_path doesn't exist
             TypeError: If BED file is incorrectly formatted
             ValueError: If trying to filter bedgraph by coverage
         """
-        if not os.path.exists(methylation_path):
+        methylation_path = Path(methylation_path)
+        if not methylation_path.exists():
             raise FileNotFoundError(f"File not found: {methylation_path}")
 
-        methylation_dict = {}
+        methylation_dict: defaultdict[str, dict[str, list[float | int]]] = defaultdict(
+            lambda: {"starts": [], "ends": [], "fraction_modified": [], "valid_coverage": []}
+        )
 
-        # helper function to add methylation data entries
-        def add_methylation_entry(methyl_dict, region_key, start, end, frac_mod, cov):
-            methyl_dict[region_key]["starts"].append(start)
-            methyl_dict[region_key]["ends"].append(start+1)
-            methyl_dict[region_key]["fraction_modified"].append(frac_mod)
-            methyl_dict[region_key]["valid_coverage"].append(cov)
-            return methyl_dict
+        region_lookup = {
+            chrom: (coords["starts"], coords["ends"])
+            for chrom, coords in region_dict.items()
+        }
 
-        with open(methylation_path, 'r') as file:
-            lines = file.readlines()
-            
-            for line in lines:
-                columns = line.strip().split('\t') # split line of bed into columns
-
-                # raise errors if: 1. not enough columns, 2. too many columns in bedgraph
-                if (len(columns) < (4 if self.bedgraph else 11)):
-                    raise TypeError(f"Insufficient columns in {methylation_path}. Likely incorrectly formatted.")
-                elif (self.bedgraph) and (len(columns) > 4):
-                    warnings.warn(f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. Potentially incorrectly formatted bedgraph file.")
-
-                # do not process entry if it has the wrong mod code (default: 'm')
-                if (not self.bedgraph) and (columns[3] != self.mod_code):
+        with methylation_path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
                     continue
-
-                chrom = columns[0] # get chromosome
-                methylation_position = int(columns[1]) # get methlation position
-
-                if chrom not in region_dict.keys():
+                columns = line.rstrip("\n").split('\t')
+                if len(columns) < (4 if self.bedgraph else 11):
+                    raise TypeError(
+                        f"Insufficient columns in {methylation_path}. Likely incorrectly formatted."
+                    )
+                if self.bedgraph and len(columns) > 4:
+                    warnings.warn(
+                        f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. "
+                        "Potentially incorrectly formatted bedgraph file.",
+                        stacklevel=2,
+                    )
+                if not self.bedgraph and columns[3] != self.mod_code:
                     continue
+                chrom = columns[0]
+                methylation_position = int(columns[1])
+                if chrom not in region_lookup:
+                    continue
+                starts, ends = region_lookup[chrom]
+                idx = bisect_right(starts, methylation_position) - 1
+                if idx < 0:
+                    continue
+                region_start = starts[idx]
+                region_end = ends[idx]
+                if not (region_start < methylation_position < region_end):
+                    continue
+                region_key = f"{chrom}:{region_start}-{region_end}"
+                entry = methylation_dict[region_key]
+                entry["starts"].append(methylation_position)
+                entry["ends"].append(methylation_position + 1)
+                entry["fraction_modified"].append(
+                    float(columns[3]) if self.bedgraph else float(columns[10])
+                )
+                entry["valid_coverage"].append(1 if self.bedgraph else float(columns[4]))
 
-                # check if the methylation position is within one of the regions on the matching chromosome
-                for r_s, r_e in zip(region_dict[chrom]['starts'], region_dict[chrom]['ends']): 
-                    if (methylation_position > r_s) and (methylation_position < r_e):
-                        region_key = f'{chrom}:{r_s}-{r_e}' # make a dictionary key that is the area of that region
-
-                        if region_key not in methylation_dict.keys(): # if that key is not in methylation dictionary create it
-                            methylation_dict[region_key] = {"starts": [], "ends": [], "fraction_modified": [], "valid_coverage": []}
-
-                        # use helper to add entry into methylation dictionary
-                        methylation_dict = add_methylation_entry( 
-                            methylation_dict, 
-                            region_key, 
-                            methylation_position, 
-                            methylation_position+1, 
-                            float(columns[3]) if self.bedgraph else float(columns[10]),
-                            1 if self.bedgraph else float(columns[4])
-                        )
-                        break
-
-        return methylation_dict
+        return {region: dict(values) for region, values in methylation_dict.items()}
 
     def process_files(self, methylation_path, regions_path):
         """
         Process and intersect methylation and regions files.
-        
         Args:
             methylation_path: Path to methylation BED file
             regions_path: Path to regions BED file
-            
         Returns:
             Tuple of (region_dict, filtered_methylation_dict)
         """
