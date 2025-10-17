@@ -1,18 +1,82 @@
-from .dip_detect import DipDetector
+from __future__ import annotations
+
+import argparse
+import os
+from typing import Dict, Iterable, List
+
 from .parser import Parser
+from .dip_detect import DipDetector
+from .dip_filter import DipFilter
 
 
-def main():
+def _write_bed(output_file: str, rows: Iterable[List[str]]) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+    with open(output_file, "w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write("\t".join(row) + "\n")
+
+
+def _value_at(values: Dict[str, List], key: str, idx: int, default: str) -> str:
+    items = values.get(key, [])
+    if idx < len(items):
+        return str(items[idx])
+    return default
+
+
+def _generate_output_rows(bed_dict: Dict[str, Dict[str, List]]) -> List[List[str]]:
+    rows: List[List[str]] = []
+    for region, values in bed_dict.items():
+        if not values:
+            continue
+        chrom = region.split(":", 1)[0]
+        starts = values.get("starts", [])
+        ends = values.get("ends", [])
+        length = min(len(starts), len(ends))
+        for idx in range(length):
+            row = [chrom]
+            row.append(str(starts[idx]))
+            row.append(str(ends[idx]))
+            row.append(_value_at(values, "names", idx, "."))
+            row.append(_value_at(values, "scores", idx, "0"))
+            row.append(_value_at(values, "strands", idx, "."))
+            row.append(_value_at(values, "thick_starts", idx, str(starts[idx])))
+            row.append(_value_at(values, "thick_ends", idx, str(ends[idx])))
+            row.append(_value_at(values, "item_rgbs", idx, "0,0,0"))
+            rows.append(row)
+    rows.sort(key=lambda entry: (entry[0], int(entry[1])))
+    return rows
+
+def _generate_track_rows(methylation_dict: Dict[str, Dict[str, List]]) -> List[List[str]]:
+    rows: List[List[str]] = []
+    for region, values in methylation_dict.items():
+        if not values:
+            continue
+        chrom = region.split(":", 1)[0]
+        starts = values.get("starts", [])
+        ends = values.get("ends", [])
+        smooth = values.get("savgol_frac_mod", [])
+        length = min(len(starts), len(ends), len(smooth))
+        for idx in range(length):
+            row = [chrom]
+            row.append(str(starts[idx]))
+            row.append(str(ends[idx]))
+            row.append(str(smooth[idx]))
+            rows.append(row)
+    rows.sort(key=lambda entry: (entry[0], int(entry[1])))
+    return rows
+
+
+def main() -> None:
     argparser = argparse.ArgumentParser(
-        description="Process bedMethyl and CenSat BED file to produce CDR predictions."
+        description="Process bedMethyl and region BED files to produce CDR predictions.",
     )
 
-    # required inputs
     argparser.add_argument("bedmethyl", type=str, help="Path to the bedmethyl file")
     argparser.add_argument("regions", type=str, help="Path to BED file of regions")
     argparser.add_argument("output", type=str, help="Path to the output BED file")
 
-    # bed parser arguments
     argparser.add_argument(
         "--mod-code",
         type=str,
@@ -23,12 +87,12 @@ def main():
         "--bedgraph",
         action="store_true",
         default=False,
-        help="Flag indicating the input is a bedgraph. If passed --mod-code and --min-cov are ignored. (default: False)",
+        help="Treat methylation input as a bedGraph (default: False)",
     )
     argparser.add_argument(
         "--region-merge-distance",
         type=int,
-        default=10000,
+        default=10_000,
         help="Merge gaps in nearby centrodip regions up to this many base pairs. (default: 10000)",
     )
     argparser.add_argument(
@@ -38,7 +102,6 @@ def main():
         help="Remove edges of merged regions in base pairs. (default: 0)",
     )
 
-    # CentroDip arguments
     argparser.add_argument(
         "--window-size",
         type=int,
@@ -49,45 +112,43 @@ def main():
         "--threshold",
         type=float,
         default=1,
-        help="Number of standard deviations from the smoothed mean to be the minimum dip. Lower values increase leniency of dip calls. (default: 1)",
+        help="Number of standard deviations from the smoothed mean to be the minimum dip. (default: 1)",
     )
     argparser.add_argument(
         "--prominence",
         type=float,
         default=0.66,
-        help="Scalar factor to decide the prominence required for an dip. Scalar is multiplied by smoothed data's difference in the minimum and maxiumum values. Lower values increase leniency of MDR calls. (default: 0.66)",
+        help="Prominence required for a dip. Scalar is multiplied by the smoothed data range. (default: 0.66)",
     )
     argparser.add_argument(
         "--min-size",
         type=int,
         default=5000,
-        help="Minimum dip size in base pairs. Small dips are removed. (default: 5000)",
+        help="Minimum dip size in base pairs. (default: 5000)",
     )
     argparser.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
-        help="Use centrodip to find areas enriched in aggregated methylation calls. (default: False)",
+        help="Find regions enriched (rather than depleted) for methylation.",
     )
     argparser.add_argument(
         "--threads",
         type=int,
         default=4,
-        help='Number of workers. (default: 4)',
+        help="Number of worker processes. (default: 4)",
     )
-
-    # output arguments
     argparser.add_argument(
         "--color",
         type=str,
         default="50,50,255",
-        help='Color of predicted dips. (default: 50,50,255)',
+        help='Color of predicted dips. (default: "50,50,255")',
     )
     argparser.add_argument(
         "--output-all",
-        action='store_true',
+        action="store_true",
         default=False,
-        help='Output all intermediate files. (default: False)',
+        help="Output smoothed methylation values as a bedGraph. (default: False)",
     )
     argparser.add_argument(
         "--label",
@@ -99,67 +160,36 @@ def main():
     args = argparser.parse_args()
     output_prefix = os.path.splitext(args.output)[0]
 
-    bed_parser = BedParse(
+    # Create Parser instance
+    parse = Parser(
         mod_code=args.mod_code,
         bedgraph=args.bedgraph,
         region_merge_distance=args.region_merge_distance,
-        region_edge_filter=args.region_edge_filter
+        region_edge_filter=args.region_edge_filter,
+    )
+    # Read in regions BED file and BEDMethyl File
+    regions_by_chrom = parse.read_and_filter_regions(regions_path=args.regions)
+    methylation_by_chrom = parse.read_and_filter_methylation(
+        methylation_path=args.bedmethyl
+        region_dict=regions_by_chrom
     )
 
-    regions_per_chrom_dict, methylation_per_region_dict = bed_parser.process_files(
-        methylation_path=args.bedmethyl,
-        regions_path=args.regions
-    )
-
-    centro_dip = CentroDip(
+    # Create DipDetector class instance
+    detector = DipDetector(
         window_size=args.window_size,
         threshold=args.threshold,
         prominence=args.prominence,
-        min_size=args.min_size,
         enrichment=args.enrichment,
-        threads=args.threads,
-        color=args.color,
-        label=args.label
+        threads=args.threads
     )
 
-    (
-        mdrs_per_region,
-        methylation_per_region
-    ) = centro_dip.centrodip_all_chromosomes(methylation_per_region=methylation_per_region_dict, regions_per_chrom=regions_per_chrom_dict)
+    # call the dips, here you have them all before filtering
+    dips_by_chrom = detector.dip_detect_all_chromosome(
+        methyl_by_chrom=methylation_by_chrom, 
+        regions_by_chrom=regions_by_chrom
+    )
 
-    def generate_output_bed(bed_dict, output_file, columns=["starts", "ends"]):
-        if not bed_dict:
-            return
+    _write_bed(dips_by_chrom)
 
-        lines = []
-        keys = list(bed_dict.keys())
-        chroms = [region.split(':')[0] for region in list(bed_dict.keys())]
-            
-        for key, chrom in zip(keys, chroms):
-            chrom_data = bed_dict[key]
-
-            if chrom_data:
-                for i in range( len(chrom_data.get("starts", [])) ):
-                    line = [chrom]
-                    for col in columns:
-                        if col in chrom_data:
-                            line.append(str(chrom_data[col][i])) 
-                    lines.append(line)
-
-        # if nothing is in all_lines, return nothing and don't write to file
-        if lines:        
-            lines = sorted(lines, key=lambda x: (x[0], int(x[1])))
-            with open(output_file, 'w') as file:
-                for line in lines: 
-                    file.write("\t".join(line) + "\n")
-        else:
-            return
-
-    if args.output_all:
-        generate_output_bed(methylation_per_region, f"{output_prefix}_savgol_frac_mod.bedgraph", columns=["starts", "ends", "savgol_frac_mod"])
-
-    generate_output_bed(mdrs_per_region, f"{args.output}", columns=["starts", "ends", "names", "scores", "strands", "starts", "ends", "itemRgbs"])
-
-
-if __name__ == "__main__":
-    main()
+    # Create DipFilter class instance
+    
