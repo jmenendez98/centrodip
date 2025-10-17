@@ -41,8 +41,7 @@ class TestParser:
         assert list(results.keys())[0] == "chrX_MATERNAL:57866525-60979767"
         assert len(list(results.keys())) == 1
         region_values = results["chrX_MATERNAL:57866525-60979767"]
-        assert len(region_values["starts"]) == 62064
-        assert len(region_values["ends"]) == 62064
+        assert len(region_values["position"]) == 62064
         assert len(region_values["fraction_modified"]) == 62064
         assert len(region_values["valid_coverage"]) == 62064
     
@@ -84,5 +83,5 @@ class TestParser:
         assert all(key.startswith(f"{expected_chrom}:") for key in methylation_dict)
 
         for values in methylation_dict.values():
-            counts = {len(values["starts"]), len(values["ends"]), len(values["fraction_modified"]), len(values["valid_coverage"])}
-            assert counts == {len(values["starts"])}
+            counts = {len(values["position"]), len(values["fraction_modified"]), len(values["valid_coverage"])}
+            assert counts == {len(values["position"])}
