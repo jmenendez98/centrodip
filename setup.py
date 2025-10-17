@@ -21,7 +21,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "centrodip=centrodip.centrodip:main",
+            "centrodip=centrodip.__main__:main",
         ]
     },
     classifiers=[

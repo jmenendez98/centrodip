@@ -168,10 +168,9 @@ def main() -> None:
         region_edge_filter=args.region_edge_filter,
     )
     # Read in regions BED file and BEDMethyl File
-    regions_by_chrom = parse.read_and_filter_regions(regions_path=args.regions)
-    methylation_by_chrom = parse.read_and_filter_methylation(
-        methylation_path=args.bedmethyl
-        region_dict=regions_by_chrom
+    methylation, regions = parse.process_files(
+        methylation_path=args.bedmethyl,
+        regions_path=args.regions
     )
 
     # Create DipDetector class instance
@@ -184,12 +183,16 @@ def main() -> None:
     )
 
     # call the dips, here you have them all before filtering
-    dips_by_chrom = detector.dip_detect_all_chromosome(
-        methyl_by_chrom=methylation_by_chrom, 
-        regions_by_chrom=regions_by_chrom
+    dips, methylation = detector.dip_detect_all_chromosome(
+        methylation_per_region=methylation, 
+        regions_per_chrom=regions
     )
 
-    _write_bed(dips_by_chrom)
+    dip_rows = _generate_output_rows(dips)
+    _write_bed(args.output, dip_rows)
 
     # Create DipFilter class instance
-    
+
+
+if __name__ == "__main__":
+    main()

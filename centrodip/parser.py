@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Dict, List
 import warnings
 
+
 RegionDict = Dict[str, Dict[str, List[int]]]
 MethylationDict = Dict[str, Dict[str, List[float]]]
 
+
 class Parser:
     """Parser to read in region and methylation bed files for centrodip."""
-
     def __init__(
         self,
         mod_code: str,
@@ -74,6 +75,7 @@ class Parser:
         region_dict: RegionDict,
     ) -> MethylationDict:
         """ Read and filter methylation data from a BED file. """
+
         methylation_path = Path(methylation_path)
         if not methylation_path.exists():
             raise FileNotFoundError(f"File not found: {methylation_path}")
@@ -93,19 +95,19 @@ class Parser:
 
         with methylation_path.open("r", encoding="utf-8") as file:
             for line in file:
-                # handle potential issues with reading in methylation file
                 if not line.strip():
                     continue
                 columns = line.rstrip("\n").split("\t")
                 min_columns = 4 if self.bedgraph else 11
                 if len(columns) < min_columns:
                     raise TypeError(
-                        f"Insufficient columns in {methylation_path}. Likely incorrectly formatted."
+                        f"Insufficient columns in {methylation_path}. "
+                        "Likely incorrectly formatted."
                     )
                 if self.bedgraph and len(columns) > 4:
                     warnings.warn(
-                        f"Warning: {methylation_path} has more than 4 columns, and was passed in as bedgraph. "
-                        "Potentially incorrectly formatted bedgraph file.",
+                        f"Warning: {methylation_path} has more than 4 columns, and was "
+                        "passed in as bedgraph. Potentially incorrectly formatted bedgraph file.",
                         stacklevel=2,
                     )
                 if not self.bedgraph and columns[3] != self.mod_code:
@@ -120,17 +122,53 @@ class Parser:
                 idx = bisect_right(starts, methylation_position) - 1
                 if idx < 0:
                     continue
-
                 region_start = starts[idx]
                 region_end = ends[idx]
                 if not (region_start < methylation_position < region_end):
                     continue
 
-                entry = methylation_dict[chrom]
+                region_key = f"{chrom}:{region_start}-{region_end}"
+                entry = methylation_dict[region_key]
                 entry["position"].append(methylation_position)
                 entry["fraction_modified"].append(
                     float(columns[3]) if self.bedgraph else float(columns[10])
                 )
-                entry["valid_coverage"].append(None if self.bedgraph else float(columns[4]))
+                entry["valid_coverage"].append(
+                    1.0 if self.bedgraph else float(columns[4])
+                )
 
-        return methylation_dict
+        sorted_dict: MethylationDict = {}
+        for region, values in methylation_dict.items():
+            sorted_entries = sorted(
+                zip(
+                    values["position"],
+                    values["fraction_modified"],
+                    values["valid_coverage"],
+                ),
+                key=lambda entry: entry[0],
+            )
+            if sorted_entries:
+                positions, frac_mod, coverage = zip(*sorted_entries)
+            else:
+                starts = ends = frac_mod = coverage = ()
+            sorted_dict[region] = {
+                "position": list(positions),
+                "fraction_modified": list(frac_mod),
+                "valid_coverage": list(coverage),
+            }
+
+        return sorted_dict
+
+    def process_files(
+        self,
+        methylation_path: Path | str,
+        regions_path: Path | str,
+    ) -> tuple[MethylationDict, RegionDict]:
+        """Read and intersect methylation and region BED files."""
+
+        regions = self.read_and_filter_regions(regions_path)
+        methylation = self.read_and_filter_methylation(methylation_path, regions)
+        return methylation, regions
+
+
+__all__ = ["Parser"]
