@@ -73,84 +73,90 @@ def main() -> None:
         description="Process bedMethyl and region BED files to produce CDR predictions.",
     )
 
-    argparser.add_argument("bedmethyl", type=str, help="Path to the bedmethyl file")
-    argparser.add_argument("regions", type=str, help="Path to BED file of regions")
+    argparser.add_argument("bedmethyl", type=str, help="Path to the bedMethyl file")
+    argparser.add_argument("regions", type=str, help="Path to BED file of regions to search for dips")
     argparser.add_argument("output", type=str, help="Path to the output BED file")
 
-    argparser.add_argument(
+    parsing_group = argparser.add_argument_group('Parsing Options', 'Arguments related to how the BED files are parsed.')
+    parsing_group.add_argument(
         "--mod-code",
         type=str,
         default="m",
         help='Modification code to filter bedMethyl file (default: "m")',
     )
-    argparser.add_argument(
+    parsing_group.add_argument(
         "--bedgraph",
         action="store_true",
         default=False,
         help="Treat methylation input as a bedGraph (default: False)",
     )
-    argparser.add_argument(
+    parsing_group.add_argument(
         "--region-merge-distance",
         type=int,
         default=10_000,
-        help="Merge gaps in nearby centrodip regions up to this many base pairs. (default: 10000)",
+        help="Merge gaps in nearby regions up to this many base pairs. (default: 10000)",
     )
-    argparser.add_argument(
+    parsing_group.add_argument(
         "--region-edge-filter",
         type=int,
         default=0,
         help="Remove edges of merged regions in base pairs. (default: 0)",
     )
 
-    argparser.add_argument(
+    dip_detect_group = argparser.add_argument_group('Dip Detection Options', 'Arguments related to how the dips are detected/extended.')
+    dip_detect_group.add_argument(
         "--window-size",
         type=int,
         default=101,
         help="Number of CpGs to include in Savitzky-Golay filtering of Fraction Modified. (default: 101)",
     )
-    argparser.add_argument(
+    dip_detect_group.add_argument(
         "--threshold",
         type=float,
         default=1,
         help="Number of standard deviations from the smoothed mean to be the minimum dip. (default: 1)",
     )
-    argparser.add_argument(
+    dip_detect_group.add_argument(
         "--prominence",
         type=float,
         default=0.66,
         help="Prominence required for a dip. Scalar is multiplied by the smoothed data range. (default: 0.66)",
     )
-    argparser.add_argument(
-        "--min-size",
-        type=int,
-        default=5000,
-        help="Minimum dip size in base pairs. (default: 5000)",
-    )
-    argparser.add_argument(
+    dip_detect_group.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
         help="Find regions enriched (rather than depleted) for methylation.",
     )
-    argparser.add_argument(
+
+    dip_filter_group = argparser.add_argument_group('Dip Filtering Options', 'Arguments related to how the dips filtered/removed.')
+    dip_filter_group.add_argument(
+        "--min-size",
+        type=int,
+        default=5000,
+        help="Minimum dip size in base pairs. (default: 5000)",
+    )
+
+    other_arguments_group = argparser.add_argument_group('Other Options', 'Miscellaneous arguments affecting outputs and runtime.')
+    other_arguments_group.add_argument(
         "--threads",
         type=int,
         default=4,
         help="Number of worker processes. (default: 4)",
     )
-    argparser.add_argument(
+    other_arguments_group.add_argument(
         "--color",
         type=str,
         default="50,50,255",
         help='Color of predicted dips. (default: "50,50,255")',
     )
-    argparser.add_argument(
+    other_arguments_group.add_argument(
         "--output-all",
         action="store_true",
         default=False,
         help="Output smoothed methylation values as a bedGraph. (default: False)",
     )
-    argparser.add_argument(
+    other_arguments_group.add_argument(
         "--label",
         type=str,
         default="CDR",
