@@ -112,12 +112,17 @@ def main() -> None:
         default=101,
         help="Number of CpGs to include in Savitzky-Golay filtering of Fraction Modified. (default: 101)",
     )
-
     dip_detect_group.add_argument(
         "--sensitivity",
         type=float,
-        default=0.66,
-        help="Sensitivity required for a dip. Multiplied by the smoothed data range to determine the prominence required for a dip. (default: 0.66)",
+        default=0.667,
+        help="Sensitivity required for a dip. Multiplied by the smoothed data range to determine the prominence required for a dip call. (default: 0.66)",
+    )
+    dip_detect_group.add_argument(
+        "--edge-sensitivity",
+        type=float,
+        default=0.5,
+        help="Sensitivity required for a edge. Multiplied by the smoothed dy range to determine the prominence required for a edge call. (default: 0.5)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -178,6 +183,7 @@ def main() -> None:
     detector = DipDetector(
         window_size=args.window_size,
         sensitivity=args.sensitivity,
+        edge_sensitivity=args.edge_sensitivity,
         enrichment=args.enrichment,
         threads=args.threads,
         debug=args.debug,
@@ -213,11 +219,9 @@ def main() -> None:
         centers_rows = _generate_dip_rows(dips, "dip_centers")
         _write_bed(f"{debug_prefix}.dip_centers.bed", centers_rows)
 
-        left_rows = _generate_dip_rows(dips, "dip_lefts")
-        _write_bed(f"{debug_prefix}.dip_lefts.bed", left_rows)
+        dip_edge_rows = _generate_dip_rows(dips, "dip_edges")
+        _write_bed(f"{debug_prefix}.dip_edges.bed", dip_edge_rows)
 
-        right_rows = _generate_dip_rows(dips, "dip_rights")
-        _write_bed(f"{debug_prefix}.dip_rights.bed", right_rows)
 
     dip_rows = _generate_output_rows(dips)
     _write_bed(args.output, dip_rows)
