@@ -66,7 +66,7 @@ def _generate_bedgraph_rows(
     rows.sort(key=lambda entry: (entry[0], int(entry[1])))
     return rows
 
-def _generate_peak_rows(
+def _generate_dip_rows(
     methylation_dict: Dict[str, Dict[str, List]],
     peak_key: str,
 ) -> List[List[str]]:
@@ -210,14 +210,14 @@ def main() -> None:
             savgol_dy_rows,
         )
 
-        centers_rows = _generate_peak_rows(dips, "peak_centers")
-        _write_bed(f"{debug_prefix}.peak_centers.bed", centers_rows)
+        centers_rows = _generate_dip_rows(dips, "dip_centers")
+        _write_bed(f"{debug_prefix}.dip_centers.bed", centers_rows)
 
-        left_rows = _generate_peak_rows(dips, "peak_lefts")
-        _write_bed(f"{debug_prefix}.peak_lefts.bed", left_rows)
+        left_rows = _generate_dip_rows(dips, "dip_lefts")
+        _write_bed(f"{debug_prefix}.dip_lefts.bed", left_rows)
 
-        right_rows = _generate_peak_rows(dips, "peak_rights")
-        _write_bed(f"{debug_prefix}.peak_rights.bed", right_rows)
+        right_rows = _generate_dip_rows(dips, "dip_rights")
+        _write_bed(f"{debug_prefix}.dip_rights.bed", right_rows)
 
     dip_rows = _generate_output_rows(dips)
     _write_bed(args.output, dip_rows)

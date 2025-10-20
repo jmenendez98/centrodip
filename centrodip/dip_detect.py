@@ -190,112 +190,52 @@ class DipDetector:
 
         return centers, lefts, rights
 
-    '''
     def extend_dips(
         self,
         methylation: MethylationRecord,
-        dips: Iterable[int],
-    ) -> List[Tuple[int, int]]:
+        centers: Iterable[int],
+        lefts: Iterable[int],
+        rights: Iterable[int],
+    ) -> Dict[str, List[int]]:
 
-        # fetch the relevant data
         starts_m = np.asarray(methylation.get("position", []), dtype=int)
-        data = np.asarray(methylation.get("savgol_frac_mod", []), dtype=float)
-        dy = np.asarray(methylation.get("savgol_frac_mod_dy", []), dtype=float)
-        if data.size == 0 or dy.size == 0:
-            return []
-
-        # detect spans on below median values that are candidate dips
-        median = np.median(data)
-        mask = data > median if self.enrichment else data < median
-        prev = np.r_[False, mask[:-1]]
-        next_ = np.r_[mask[1:], False]
-        starts = np.flatnonzero(mask & ~prev)
-        ends = np.flatnonzero(mask & ~next_)
-        lefts = np.maximum(starts - 1, 0)
-        rights = np.minimum(ends + 1, data.size - 1)
-        dips_arr = np.asarray(list(dips), dtype=int)
-        if dips_arr.size == 0:
-            return []
-
-        # assign each called dip to the span that contains it
-        idx = np.searchsorted(starts, dips_arr, side="right") - 1
-        valid = idx >= 0
-        valid &= mask[dips_arr]
-        valid &= dips_arr <= ends[idx.clip(min=0)]
-        idx = idx[valid]
-        dip_bounds = [(int(lefts[i]), int(rights[i])) for i in idx]
-
-        # make edges more accurate by using the spots where the slopes are most drastic
-        dip_bounds_adj: List[Tuple[int, int]] = []
-        for dip, (left, right) in zip(dips_arr[valid], dip_bounds):
-            if left > dip:
-                left = dip
-            if right < dip:
-                right = dip
-            left_idx = int(np.argmin(dy[left : dip + 1]) + left)
-            right_idx = int(np.argmax(dy[dip : right + 1]) + dip)
-            dip_bounds_adj.append((left_idx, right_idx))
-
-        # convert the dip indices back into genomic coordinates
-        dips = {}
-        dips['starts'] = []
-        dips['ends'] = []
-        for s, e in dip_bounds_adj:
-            dips['starts'].append( starts_m[s] )
-            dips['ends'].append( starts_m[e] )
-
-        return dips
-    '''
-    def extend_dips(
-        self,
-        methylation: MethylationRecord,
-        dips: Iterable[int],
-    ) -> List[Tuple[int, int]]:
-
-        # fetch the relevant data
-        starts_m = np.asarray(methylation.get("position", []), dtype=int)
-        data = np.asarray(methylation.get("savgol_frac_mod", []), dtype=float)
-        dy = np.asarray(methylation.get("savgol_frac_mod_dy", []), dtype=float)
-        if data.size == 0 or dy.size == 0:
+        if starts_m.size == 0:
             return _empty_dip_record()
 
-        # detect spans on below median values that are candidate dips
-        median = np.median(data)
-        mask = data > median if self.enrichment else data < median
-        prev = np.r_[False, mask[:-1]]
-        next_ = np.r_[mask[1:], False]
-        starts = np.flatnonzero(mask & ~prev)
-        ends = np.flatnonzero(mask & ~next_)
-        lefts = np.maximum(starts - 1, 0)
-        rights = np.minimum(ends + 1, data.size - 1)
-        dips_arr = np.asarray(list(dips), dtype=int)
-        if dips_arr.size == 0:
+        centers_arr = np.asarray(list(centers), dtype=int)
+        lefts_arr = np.asarray(list(lefts), dtype=int)
+        rights_arr = np.asarray(list(rights), dtype=int)
+
+        if centers_arr.size == 0:
             return _empty_dip_record()
 
-        # assign each called dip to the span that contains it
-        idx = np.searchsorted(starts, dips_arr, side="right") - 1
-        valid = idx >= 0
-        valid &= mask[dips_arr]
-        valid &= dips_arr <= ends[idx.clip(min=0)]
-        idx = idx[valid]
-        dip_bounds = [(int(lefts[i]), int(rights[i])) for i in idx]
+        dip_bounds: List[Tuple[int, int]] = []
 
-        # make edges more accurate by using the spots where the slopes are most drastic
-        dip_bounds_adj: List[Tuple[int, int]] = []
-        for dip, (left, right) in zip(dips_arr[valid], dip_bounds):
-            if left > dip:
-                left = dip
-            if right < dip:
-                right = dip
-            left_idx = int(np.argmin(dy[left : dip + 1]) + left)
-            right_idx = int(np.argmax(dy[dip : right + 1]) + dip)
-            dip_bounds_adj.append((left_idx, right_idx))
+        for center in centers_arr:
+            if center < 0 or center >= starts_m.size:
+                continue
 
-        # convert the dip indices back into genomic coordinates
+            left_candidates = lefts_arr[lefts_arr <= center]
+            right_candidates = rights_arr[rights_arr >= center]
+
+            if left_candidates.size == 0 and right_candidates.size == 0:
+                left_idx = right_idx = int(center)
+            else:
+                left_idx = int(left_candidates[-1]) if left_candidates.size else int(center)
+                right_idx = int(right_candidates[0]) if right_candidates.size else int(center)
+
+            left_idx = max(0, min(left_idx, starts_m.size - 1))
+            right_idx = max(0, min(right_idx, starts_m.size - 1))
+
+            if right_idx < left_idx:
+                left_idx, right_idx = right_idx, left_idx
+
+            dip_bounds.append((left_idx, right_idx))
+
         dips = _empty_dip_record()
-        for s, e in dip_bounds_adj:
-            dips['starts'].append( starts_m[s] )
-            dips['ends'].append( starts_m[e] )
+        for left_idx, right_idx in dip_bounds:
+            dips["starts"].append(int(starts_m[left_idx]))
+            dips["ends"].append(int(starts_m[right_idx]))
 
         return dips
 
@@ -323,14 +263,19 @@ class DipDetector:
                 continue
 
             centers, lefts, rights = self.detect_dips(region_data)
-            dip_results[region_key] = self.extend_dips(region_data, centers)
+            dip_results[region_key] = self.extend_dips(
+                methylation=region_data, 
+                centers=centers, 
+                lefts=lefts, 
+                rights=rights
+            )
 
             if self.debug:
                 positions = region_data.get("position", [])
                 debug_payload = {
-                    "peak_centers": [positions[idx] for idx in centers if idx < len(positions)],
-                    "peak_lefts": [positions[idx] for idx in lefts if idx < len(positions)],
-                    "peak_rights": [positions[idx] for idx in rights if idx < len(positions)],
+                    "dip_centers": [positions[idx] for idx in centers if idx < len(positions)],
+                    "dip_lefts": [positions[idx] for idx in lefts if idx < len(positions)],
+                    "dip_rights": [positions[idx] for idx in rights if idx < len(positions)],
                 }
                 dip_results.update(debug_payload)
 
