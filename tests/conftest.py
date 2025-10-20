@@ -60,8 +60,6 @@ def bed_parser() -> Parser:
     return Parser(
         mod_code="m",
         bedgraph=False,
-        region_edge_filter=0,
-        region_merge_distance=0,
     )
 
 

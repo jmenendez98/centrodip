@@ -9,21 +9,21 @@ class TestParser:
         """Test handling of nonexistent file"""
         nonexistent_file = test_data_dir / "nonexistent.bed"
         with pytest.raises(FileNotFoundError):
-            bed_parser.read_and_filter_regions(nonexistent_file)
+            bed_parser.read_regions_bed(nonexistent_file)
         with pytest.raises(FileNotFoundError):
             bed_parser.read_and_filter_methylation(nonexistent_file, {})
 
     def test_empty_bedfile(self, test_data_dir: Path, bed_parser):
         """Test handling of empty file"""
         empty_file = test_data_dir / "empty.bed"
-        result1 = bed_parser.read_and_filter_regions(empty_file)
+        result1 = bed_parser.read_regions_bed(empty_file)
         result2 = bed_parser.read_and_filter_methylation(empty_file, result1)
         assert len(result1) == 0
         assert len(result2) == 0
 
     def test_censat_bedfile(self, test_data_dir: Path, bed_parser):
         sample_censat_bed = test_data_dir / "censat_test.bed"
-        results = bed_parser.read_and_filter_regions(sample_censat_bed)
+        results = bed_parser.read_regions_bed(sample_censat_bed)
         assert list(results.keys())[0] == "chrX_MATERNAL"
         assert len(list(results.keys())) == 1
         assert results["chrX_MATERNAL"]["starts"] == [57866525]
@@ -33,7 +33,7 @@ class TestParser:
         """Test basic bedmethyl reading functionality"""
         sample_bedmethyl_bed = test_data_dir / "bedmethyl_test.bed"
         sample_censat_bed = test_data_dir / "censat_test.bed"
-        regions_dict = bed_parser.read_and_filter_regions(sample_censat_bed)
+        regions_dict = bed_parser.read_regions_bed(sample_censat_bed)
         results = bed_parser.read_and_filter_methylation(
             sample_bedmethyl_bed,
             regions_dict,
@@ -71,7 +71,7 @@ class TestParser:
         if not dataset_paths:
             pytest.skip(f"Dataset {dataset_key} could not be downloaded.")
 
-        regions_dict = bed_parser.read_and_filter_regions(dataset_paths["regions"])
+        regions_dict = bed_parser.read_regions_bed(dataset_paths["regions"])
         methylation_dict = bed_parser.read_and_filter_methylation(
             dataset_paths["bedmethyl"],
             regions_dict,

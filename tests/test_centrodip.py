@@ -27,10 +27,9 @@ class TestMatrix:
         selected_dataset = None
 
         for dataset_key, dataset_paths in remote_dataset_paths.items():
-            regions_dict = bed_parser.read_and_filter_regions(dataset_paths["regions"])
-            methylation_dict = bed_parser.read_and_filter_methylation(
-                dataset_paths["bedmethyl"],
-                regions_dict,
+            methylation_dict, regions_dict = bed_parser.process_files(
+                methylation_path=dataset_paths["bedmethyl"],
+                regions_path=dataset_paths["regions"]
             )
 
             for region_name, region_values in methylation_dict.items():

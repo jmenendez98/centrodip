@@ -82,25 +82,13 @@ def main() -> None:
         "--mod-code",
         type=str,
         default="m",
-        help='Modification code to filter bedMethyl file (default: "m")',
+        help='Modification code to filter bedMethyl file. Selects rows with this as fourth column value. (default: "m")',
     )
     parsing_group.add_argument(
         "--bedgraph",
         action="store_true",
         default=False,
-        help="Treat methylation input as a bedGraph (default: False)",
-    )
-    parsing_group.add_argument(
-        "--region-merge-distance",
-        type=int,
-        default=10_000,
-        help="Merge gaps in nearby regions up to this many base pairs. (default: 10000)",
-    )
-    parsing_group.add_argument(
-        "--region-edge-filter",
-        type=int,
-        default=0,
-        help="Remove edges of merged regions in base pairs. (default: 0)",
+        help="Treat methylation input as a bedGraph. Takes Fraction Modified from the fourth column. (default: False)",
     )
 
     dip_detect_group = argparser.add_argument_group('Dip Detection Options', 'Arguments related to how the dips are detected/extended.')
@@ -170,8 +158,6 @@ def main() -> None:
     parse = Parser(
         mod_code=args.mod_code,
         bedgraph=args.bedgraph,
-        region_merge_distance=args.region_merge_distance,
-        region_edge_filter=args.region_edge_filter,
     )
     # Read in regions BED file and BEDMethyl File
     methylation, regions = parse.process_files(

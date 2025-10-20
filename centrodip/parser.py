@@ -17,15 +17,11 @@ class Parser:
         self,
         mod_code: str,
         bedgraph: bool,
-        region_merge_distance: int,
-        region_edge_filter: int,
     ) -> None:
         self.mod_code = mod_code
         self.bedgraph = bedgraph
-        self.region_merge_distance = region_merge_distance
-        self.region_edge_filter = region_edge_filter
 
-    def read_and_filter_regions(self, regions_path: Path | str) -> RegionDict:
+    def read_regions_bed(self, regions_path: Path | str) -> RegionDict:
         """ Read and filter regions from a BED file. """
 
         regions_path = Path(regions_path)
@@ -48,26 +44,7 @@ class Parser:
                 region_dict[chrom]["starts"].append(start)
                 region_dict[chrom]["ends"].append(end)
 
-        merged_regions: RegionDict = {}
-        for chrom, coords in region_dict.items():
-            sorted_regions = sorted(zip(coords["starts"], coords["ends"]))
-
-            merged_starts: List[int] = []
-            merged_ends: List[int] = []
-            for start, end in sorted_regions:
-                if not merged_starts or start - merged_ends[-1] > self.region_merge_distance:
-                    trimmed_start = start + self.region_edge_filter
-                    trimmed_end = end - self.region_edge_filter
-                    if trimmed_end <= trimmed_start:
-                        continue
-                    merged_starts.append(trimmed_start)
-                    merged_ends.append(trimmed_end)
-                else:
-                    merged_ends[-1] = max(merged_ends[-1], end - self.region_edge_filter)
-
-            merged_regions[chrom] = {"starts": merged_starts, "ends": merged_ends}
-
-        return merged_regions
+        return region_dict
     
     def read_and_filter_methylation(
         self,
@@ -166,7 +143,7 @@ class Parser:
     ) -> tuple[MethylationDict, RegionDict]:
         """Read and intersect methylation and region BED files."""
 
-        regions = self.read_and_filter_regions(regions_path)
+        regions = self.read_regions_bed(regions_path)
         methylation = self.read_and_filter_methylation(methylation_path, regions)
         return methylation, regions
 
