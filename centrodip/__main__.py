@@ -17,13 +17,11 @@ def _write_bed(output_file: str, rows: Iterable[List[str]]) -> None:
         for row in rows:
             handle.write("\t".join(row) + "\n")
 
-
 def _value_at(values: Dict[str, List], key: str, idx: int, default: str) -> str:
     items = values.get(key, [])
     if idx < len(items):
         return str(items[idx])
     return default
-
 
 def _generate_output_rows(bed_dict: Dict[str, Dict[str, List]]) -> List[List[str]]:
     rows: List[List[str]] = []
@@ -48,22 +46,38 @@ def _generate_output_rows(bed_dict: Dict[str, Dict[str, List]]) -> List[List[str
     rows.sort(key=lambda entry: (entry[0], int(entry[1])))
     return rows
 
-def _generate_track_rows(methylation_dict: Dict[str, Dict[str, List]]) -> List[List[str]]:
+def _generate_bedgraph_rows(
+    methylation_dict: Dict[str, Dict[str, List]],
+    value_key: str,
+) -> List[List[str]]:
     rows: List[List[str]] = []
     for region, values in methylation_dict.items():
         if not values:
             continue
         chrom = region.split(":", 1)[0]
-        starts = values.get("starts", [])
-        ends = values.get("ends", [])
-        smooth = values.get("savgol_frac_mod", [])
-        length = min(len(starts), len(ends), len(smooth))
+        positions = values.get("position", [])
+        metrics = values.get(value_key, [])
+        length = min(len(positions), len(metrics))
         for idx in range(length):
-            row = [chrom]
-            row.append(str(starts[idx]))
-            row.append(str(ends[idx]))
-            row.append(str(smooth[idx]))
-            rows.append(row)
+            start = int(positions[idx])
+            end = start + 1
+            metric = metrics[idx]
+            rows.append([chrom, str(start), str(end), str(metric)])
+    rows.sort(key=lambda entry: (entry[0], int(entry[1])))
+    return rows
+
+def _generate_peak_rows(
+    methylation_dict: Dict[str, Dict[str, List]],
+    peak_key: str,
+) -> List[List[str]]:
+    rows: List[List[str]] = []
+    for region, values in methylation_dict.items():
+        if not values:
+            continue
+        chrom = region.split(":", 1)[0]
+        for pos in values.get(peak_key, []) or []:
+            start = int(pos)
+            rows.append([chrom, str(start), str(start + 1)])
     rows.sort(key=lambda entry: (entry[0], int(entry[1])))
     return rows
 
@@ -165,7 +179,8 @@ def main() -> None:
         window_size=args.window_size,
         sensitivity=args.sensitivity,
         enrichment=args.enrichment,
-        threads=args.threads
+        threads=args.threads,
+        debug=args.debug,
     )
 
     # call the dips, here you have them all before filtering
@@ -174,10 +189,42 @@ def main() -> None:
         regions_per_chrom=regions
     )
 
+    if args.debug:
+        debug_prefix = f"{output_prefix}.debug"
+
+        savgol_rows = _generate_bedgraph_rows(
+            methylation,
+            value_key="savgol_frac_mod",
+        )
+        _write_bed(
+            f"{debug_prefix}.savgol_frac_mod.bedgraph",
+            savgol_rows,
+        )
+
+        savgol_dy_rows = _generate_bedgraph_rows(
+            methylation,
+            value_key="savgol_frac_mod_dy",
+        )
+        _write_bed(
+            f"{debug_prefix}.savgol_frac_mod_dy.bedgraph",
+            savgol_dy_rows,
+        )
+
+        centers_rows = _generate_peak_rows(dips, "peak_centers")
+        _write_bed(f"{debug_prefix}.peak_centers.bed", centers_rows)
+
+        left_rows = _generate_peak_rows(dips, "peak_lefts")
+        _write_bed(f"{debug_prefix}.peak_lefts.bed", left_rows)
+
+        right_rows = _generate_peak_rows(dips, "peak_rights")
+        _write_bed(f"{debug_prefix}.peak_rights.bed", right_rows)
+
     dip_rows = _generate_output_rows(dips)
     _write_bed(args.output, dip_rows)
 
     # Create DipFilter class instance
+
+
 
 
 if __name__ == "__main__":
