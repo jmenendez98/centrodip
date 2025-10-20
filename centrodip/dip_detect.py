@@ -140,27 +140,53 @@ class DipDetector:
 
     def detect_dips(self, methylation: MethylationRecord) -> np.ndarray:
         data = np.asarray(methylation.get("savgol_frac_mod", []), dtype=float)
+        dy = np.asarray(methylation.get("savgol_frac_mod_dy", []), dtype=float)
+
         if data.size == 0:
-            return np.array([], dtype=int)
+            return np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=int)
 
         data_range = float(np.max(data) - np.min(data)) if data.size else 0.0
-        prominence_threshold = self.sensitivity * data_range
+        dy_range = float(np.max(dy) - np.min(dy)) if dy.size else 0.0
+
+        data_prominence_threshold = self.sensitivity * data_range
+        dy_prominence_threshold = self.sensitivity * dy_range
 
         mean = float(np.mean(data)) if data.size else 0.0
         std = float(np.std(data)) if data.size else 0.0
         if self.enrichment:
-            peaks, _ = signal.find_peaks(
+            centers, _ = signal.find_peaks(
                 data,
                 prominence=prominence_threshold,
                 wlen=data.size if data.size else None,
             )
+            lefts, _ = signal.find_peaks(
+                dy,
+                prominence=dy_prominence_threshold,
+                wlen=data.size if data.size else None,
+            )
+            rights, _ = signal.find_peaks(
+                -dy,
+                prominence=dy_prominence_threshold,
+                wlen=data.size if data.size else None,
+            )            
         else:
-            peaks, _ = signal.find_peaks(
+            centers, _ = signal.find_peaks(
                 -data,
                 prominence=prominence_threshold,
                 wlen=data.size if data.size else None,
             )
-        return peaks
+            lefts, _ = signal.find_peaks(
+                -dy,
+                prominence=dy_prominence_threshold,
+                wlen=data.size if data.size else None,
+            )
+            rights, _ = signal.find_peaks(
+                dy,
+                prominence=dy_prominence_threshold,
+                wlen=data.size if data.size else None,
+            )
+
+        return peaks, lefts, rights
 
     def extend_dips(
         self,
