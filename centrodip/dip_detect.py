@@ -30,14 +30,12 @@ class DipDetector:
     def __init__(
         self,
         window_size,
-        threshold,
-        prominence,
+        sensitivity,
         enrichment,
         threads
     ) -> None:
         self.window_size = window_size
-        self.threshold = threshold
-        self.prominence = prominence
+        self.sensitivity = sensitivity
 
         self.enrichment = enrichment
 
@@ -146,23 +144,19 @@ class DipDetector:
             return np.array([], dtype=int)
 
         data_range = float(np.max(data) - np.min(data)) if data.size else 0.0
-        prominence_threshold = self.prominence * data_range
+        prominence_threshold = self.sensitivity * data_range
 
         mean = float(np.mean(data)) if data.size else 0.0
         std = float(np.std(data)) if data.size else 0.0
         if self.enrichment:
-            height_threshold = mean + (std * self.threshold)
             peaks, _ = signal.find_peaks(
                 data,
-                height=height_threshold,
                 prominence=prominence_threshold,
                 wlen=data.size if data.size else None,
             )
         else:
-            height_threshold = mean - (std * self.threshold)
             peaks, _ = signal.find_peaks(
                 -data,
-                height=-height_threshold,
                 prominence=prominence_threshold,
                 wlen=data.size if data.size else None,
             )

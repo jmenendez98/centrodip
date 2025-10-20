@@ -98,17 +98,12 @@ def main() -> None:
         default=101,
         help="Number of CpGs to include in Savitzky-Golay filtering of Fraction Modified. (default: 101)",
     )
+
     dip_detect_group.add_argument(
-        "--threshold",
-        type=float,
-        default=1,
-        help="Number of standard deviations from the smoothed mean to be the minimum dip. (default: 1)",
-    )
-    dip_detect_group.add_argument(
-        "--prominence",
+        "--sensitivity",
         type=float,
         default=0.66,
-        help="Prominence required for a dip. Scalar is multiplied by the smoothed data range. (default: 0.66)",
+        help="Sensitivity required for a dip. Multiplied by the smoothed data range to determine the prominence required for a dip. (default: 0.66)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -139,10 +134,10 @@ def main() -> None:
         help='Color of predicted dips. (default: "50,50,255")',
     )
     other_arguments_group.add_argument(
-        "--output-all",
+        "--debug",
         action="store_true",
         default=False,
-        help="Output smoothed methylation values as a bedGraph. (default: False)",
+        help="Dumps smooth methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
     )
     other_arguments_group.add_argument(
         "--label",
@@ -168,8 +163,7 @@ def main() -> None:
     # Create DipDetector class instance
     detector = DipDetector(
         window_size=args.window_size,
-        threshold=args.threshold,
-        prominence=args.prominence,
+        sensitivity=args.sensitivity,
         enrichment=args.enrichment,
         threads=args.threads
     )
