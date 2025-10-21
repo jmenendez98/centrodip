@@ -1,6 +1,6 @@
 import pytest
 
-from centrodip.parser import Parser
+from centrodip.parse import Parser
 from centrodip.dip_detect import DipDetector
 
 from tests.conftest import EXPECTED_CHROMS

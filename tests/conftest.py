@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from centrodip.parser import Parser
+from centrodip.parse import Parser
 
 REMOTE_DATASETS: Dict[str, Dict[str, str]] = {
     "chm13_chr1": {

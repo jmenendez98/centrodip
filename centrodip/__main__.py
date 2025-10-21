@@ -4,7 +4,7 @@ import argparse
 import os
 from typing import Dict, Iterable, List
 
-from .parser import Parser
+from .parse import Parser
 from .dip_detect import DipDetector
 from .dip_filter import DipFilter
 
@@ -147,22 +147,28 @@ def main() -> None:
         help="Number of worker processes. (default: 4)",
     )
     other_arguments_group.add_argument(
-        "--color",
-        type=str,
-        default="50,50,255",
-        help='Color of predicted dips. (default: "50,50,255")',
-    )
-    other_arguments_group.add_argument(
         "--debug",
         action="store_true",
         default=False,
         help="Dumps smooth methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
     )
     other_arguments_group.add_argument(
+        "--plot",
+        action="store_true",
+        default=False,
+        help="Create summary plot of the results. Written to <output_prefix>.summary.png (default: False)",
+    )
+    other_arguments_group.add_argument(
         "--label",
         type=str,
         default="CDR",
         help='Label to use for regions in BED output. (default: "CDR")',
+    )
+    other_arguments_group.add_argument(
+      "--color",
+        type=str,
+        default="50,50,255",
+        help='Color of predicted dips. (default: "50,50,255")',
     )
 
     args = argparser.parse_args()
