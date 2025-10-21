@@ -9,6 +9,7 @@ import scipy
 class DipFilter:
     def __init__(
         self,
-        dips
+        min_size: int = 50,
+
     ):
-        self.dips = dips
+        self.min_size = min_size

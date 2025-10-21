@@ -238,12 +238,15 @@ def main() -> None:
             output_path=summary_path,
         )
 
+    # Create DipFilter class instance
+    dip_filter = DipFilter(
+        min_size=args.min_size,
+    )
+    # filter the dips
+
+    # write filtered dips to output BED file
     dip_rows = _generate_output_rows(dips)
     _write_bed(args.output, dip_rows)
-
-    # Create DipFilter class instance
-
-
 
 
 if __name__ == "__main__":
