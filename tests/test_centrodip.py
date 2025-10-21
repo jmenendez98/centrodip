@@ -11,7 +11,8 @@ class TestMatrix:
         """Fixture for matrix calculator"""
         return DipDetector(
             window_size=51,
-            sensitivity=0.5,
+            sensitivity=0.667,
+            edge_sensitivity=0.5,
             enrichment=False,
             threads=1,
         )
