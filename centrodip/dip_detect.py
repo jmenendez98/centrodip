@@ -347,7 +347,8 @@ class DipDetector:
                     chrom,
                     region_keys,
                     chrom_records,
-                ): chrom
+                ): 
+                for chrom, region_keys, chrom_records in chrom_inputs
             }
             for future in concurrent.futures.as_completed(futures):
                 dips, methylation, summary = future.result()
