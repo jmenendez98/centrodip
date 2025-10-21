@@ -340,16 +340,16 @@ class DipDetector:
             return dip_results, methylation_results
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
-            futures = {
-                executor.submit(
+            futures = {}
+            for chrom, region_keys, chrom_records in chrom_inputs:
+                future = executor.submit(
                     DipDetector._process_single_chromosome,
                     self,
                     chrom,
                     region_keys,
                     chrom_records,
-                ): 
-                for chrom, region_keys, chrom_records in chrom_inputs
-            }
+                )
+                futures[future] = chrom
             for future in concurrent.futures.as_completed(futures):
                 dips, methylation, summary = future.result()
                 dip_results.update(dips)
