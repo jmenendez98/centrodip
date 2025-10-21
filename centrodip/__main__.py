@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List
 from .parse import Parser
 from .dip_detect import DipDetector
 from .dip_filter import DipFilter
+from .plot import create_summary_plot
 
 
 def _write_bed(output_file: str, rows: Iterable[List[str]]) -> None:
@@ -228,6 +229,14 @@ def main() -> None:
         dip_edge_rows = _generate_dip_rows(dips, "dip_edges")
         _write_bed(f"{debug_prefix}.dip_edges.bed", dip_edge_rows)
 
+    if args.plot:
+        summary_path = f"{output_prefix}.summary.png"
+        create_summary_plot(
+            regions_per_chrom=regions,
+            methylation_per_region=methylation,
+            dip_results=dips,
+            output_path=summary_path,
+        )
 
     dip_rows = _generate_output_rows(dips)
     _write_bed(args.output, dip_rows)
