@@ -139,6 +139,12 @@ def main() -> None:
         default=5000,
         help="Minimum dip size in base pairs. (default: 5000)",
     )
+    dip_filter_group.add_argument(
+        "--cluster-distance",
+        type=int,
+        default=-1,
+        help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: -1)",
+    )
 
     other_arguments_group = argparser.add_argument_group('Other Options', 'Miscellaneous arguments affecting outputs and runtime.')
     other_arguments_group.add_argument(
@@ -229,24 +235,26 @@ def main() -> None:
         dip_edge_rows = _generate_dip_rows(dips, "dip_edges")
         _write_bed(f"{debug_prefix}.dip_edges.bed", dip_edge_rows)
 
+    # Create DipFilter class instance
+    dip_filter = DipFilter(
+        min_size=args.min_size,
+        cluster_distance=args.cluster_distance,
+    )
+    # filter the dips
+    dips_filtered = dip_filter.filter(dips)
+
+    # write filtered dips to output BED file
+    dip_rows = _generate_output_rows(dips_filtered)
+    _write_bed(args.output, dip_rows)
+
     if args.plot:
         summary_path = f"{output_prefix}.summary.png"
         create_summary_plot(
             regions_per_chrom=regions,
             methylation_per_region=methylation,
-            dip_results=dips,
+            dip_results=dips_filtered,
             output_path=summary_path,
         )
-
-    # Create DipFilter class instance
-    dip_filter = DipFilter(
-        min_size=args.min_size,
-    )
-    # filter the dips
-
-    # write filtered dips to output BED file
-    dip_rows = _generate_output_rows(dips)
-    _write_bed(args.output, dip_rows)
 
 
 if __name__ == "__main__":
