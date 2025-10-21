@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,19 +18,10 @@ DipDict = Dict[str, DipRecord]
 
 
 def _region_key(chrom: str, start: int, end: int) -> str:
-    """Build the canonical region key ``chrom:start-end``."""
-
     return f"{chrom}:{start}-{end}"
 
 
 def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
-    """Return the inclusive interval bounds in ascending order.
-
-    Zero-length intervals are expanded by 0.5 bp on either side to ensure they
-    remain visible once plotted while keeping the rectangle centred on the
-    genomic coordinate.
-    """
-
     left = float(min(start, end))
     right = float(max(start, end))
     if left == right:
@@ -39,23 +30,80 @@ def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
     return left, right
 
 
-def _sorted_by_position(record: MethylationRecord, key: str) -> Sequence[float]:
-    """Return ``record[key]`` sorted by genomic position.
-
-    The methylation records keep the underlying ``position`` array sorted, but
-    the helper defensively reorders the requested value list by the same
-    ordering in case a pre-processed dictionary was passed in.
-    """
-
+def _ordered_positions(
+    record: MethylationRecord, key: str
+) -> Tuple[Sequence[float], Sequence[float]]:
     positions = list(record.get("position", []))
     values = list(record.get(key, []))
 
     if not positions or not values:
-        return []
+        return [], []
 
     length = min(len(positions), len(values))
     order = sorted(range(length), key=positions.__getitem__)
-    return [values[idx] for idx in order]
+    return (
+        [positions[idx] for idx in order],
+        [values[idx] for idx in order],
+    )
+
+
+def _position_edges(positions: Sequence[float]) -> np.ndarray:
+    if not positions:
+        return np.asarray([])
+
+    ordered = np.asarray(sorted(float(pos) for pos in positions))
+    if len(ordered) == 1:
+        pos = ordered[0]
+        return np.asarray([pos - 0.5, pos + 0.5])
+
+    deltas = np.diff(ordered)
+    left_edge = ordered[0] - deltas[0] / 2.0
+    right_edge = ordered[-1] + deltas[-1] / 2.0
+    midpoints = (ordered[:-1] + ordered[1:]) / 2.0
+    return np.concatenate(([left_edge], midpoints, [right_edge]))
+
+
+def _fraction_window_bins(
+    positions: Sequence[float],
+    values: Sequence[float],
+    region_start: int,
+    region_end: int,
+    *,
+    window_size: float = 1000.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    if not positions or not values:
+        return np.asarray([]), np.asarray([])
+
+    region_min = float(min(region_start, region_end))
+    region_max = float(max(region_start, region_end))
+    if region_min == region_max:
+        region_min -= 0.5
+        region_max += 0.5
+
+    edges = np.arange(region_min, region_max, window_size, dtype=float)
+    if edges.size == 0 or edges[-1] < region_max:
+        edges = np.append(edges, region_max)
+    else:
+        edges[-1] = region_max
+
+    if edges[0] != region_min:
+        edges = np.insert(edges, 0, region_min)
+
+    pos_arr = np.asarray(positions, dtype=float)
+    val_arr = np.asarray(values, dtype=float)
+
+    means: List[float] = []
+    for left, right in zip(edges[:-1], edges[1:]):
+        if right < left:
+            left, right = right, left
+        is_last = np.isclose(right, edges[-1])
+        mask = (pos_arr >= left) & (pos_arr < right if not is_last else pos_arr <= right)
+        if np.any(mask):
+            means.append(float(np.nanmean(val_arr[mask])))
+        else:
+            means.append(np.nan)
+
+    return edges, np.asarray(means, dtype=float)
 
 
 def _plot_band(
@@ -68,31 +116,63 @@ def _plot_band(
     y_top: float,
     norm: Normalize,
 ) -> None:
-    """Draw a horizontal heatmap band for a methylation metric."""
-
-    values = _sorted_by_position(record, value_key)
-    if not values:
+    positions, values = _ordered_positions(record, value_key)
+    if not positions or not values:
         return
 
-    data = np.asarray(values, dtype=float)[np.newaxis, :]
+    edges_x = _position_edges(positions)
+    if len(edges_x) < 2:
+        return
 
-    region_left, region_right = _normalise_interval(region_start, region_end)
-    extent = (region_left, region_right, y_bottom, y_top)
+    data = np.ma.masked_invalid(np.asarray(values, dtype=float)[np.newaxis, :])
+    edges_y = np.asarray([y_bottom, y_top], dtype=float)
 
     cmap = plt.get_cmap("Greys")
-    ax.imshow(
+    ax.pcolormesh(
+        edges_x,
+        edges_y,
         data,
-        aspect="auto",
-        origin="lower",
+        shading="auto",
         cmap=cmap,
         norm=norm,
-        extent=extent,
     )
 
 
-def _plot_regions(ax: plt.Axes, regions: Iterable[Tuple[int, int]]) -> None:
-    """Draw the search regions at the bottom of the panel."""
+def _plot_fraction_line(
+    ax: plt.Axes,
+    record: MethylationRecord,
+    region_start: int,
+    region_end: int,
+    *,
+    window_size: float = 1000.0,
+    color: str = "black",
+    linewidth: float = 1,
+    alpha : float = 0.5,
+) -> None:
+    positions, values = _ordered_positions(record, "fraction_modified")
+    if not positions or not values:
+        return
 
+    edges, means = _fraction_window_bins(
+        positions,
+        values,
+        region_start,
+        region_end,
+        window_size=window_size,
+    )
+    if edges.size < 2 or means.size == 0:
+        return
+
+    centres = (edges[:-1] + edges[1:]) / 2.0
+    mask = ~np.isnan(means)
+    if not np.any(mask):
+        return
+
+    y_values = 1.75 + np.asarray(means[mask], dtype=float) / 100.0
+    ax.plot(centres[mask], y_values, color=color, linewidth=linewidth, alpha=alpha)
+
+
+def _plot_regions(ax: plt.Axes, regions: Iterable[Tuple[int, int]]) -> None:
     for start, end in regions:
         start = int(start)
         end = int(end)
@@ -101,16 +181,14 @@ def _plot_regions(ax: plt.Axes, regions: Iterable[Tuple[int, int]]) -> None:
             (left, 0),
             right - left,
             1,
-            facecolor="red",
-            alpha=0.4,
+            facecolor=(153/255,0/255,0/255),
+            alpha=1,
             edgecolor="none",
         )
         ax.add_patch(rect)
 
 
 def _plot_dips(ax: plt.Axes, dips: DipRecord) -> None:
-    """Visualise dip intervals as black rectangles in the top track."""
-
     starts = dips.get("starts", []) if dips else []
     ends = dips.get("ends", []) if dips else []
 
@@ -121,7 +199,7 @@ def _plot_dips(ax: plt.Axes, dips: DipRecord) -> None:
         rect = Rectangle(
             (left, 3),
             right - left,
-            1,
+            0.5,
             facecolor="black",
             alpha=0.7,
             edgecolor="none",
@@ -132,20 +210,14 @@ def _plot_dips(ax: plt.Axes, dips: DipRecord) -> None:
 def _add_track_legends(
     ax: plt.Axes,
     coverage_norm: Normalize,
-    fraction_norm: Normalize,
 ) -> None:
-    """Attach compact horizontal colour bars for the heatmap tracks."""
-
-    track_height = 1.0 / 4.0
-    bar_height = track_height * 0.35
+    total_height = ax.get_ylim()[1] - ax.get_ylim()[0]
     bar_width = 0.12
+    bar_height = 0.08
+    coverage_centre = 1.25
+    bottom = coverage_centre / total_height - bar_height / 2
 
-    def _legend_axes(track_index: int) -> plt.Axes:
-        bottom = track_index * track_height + (track_height - bar_height) / 2
-        return ax.inset_axes([1.02, bottom, bar_width, bar_height])
-
-    # Coverage legend (grayscale bar capped at 10)
-    coverage_ax = _legend_axes(1)
+    coverage_ax = ax.inset_axes([1.02, bottom, bar_width, bar_height])
     coverage_cbar = plt.colorbar(
         ScalarMappable(norm=coverage_norm, cmap="Greys"),
         cax=coverage_ax,
@@ -154,17 +226,6 @@ def _add_track_legends(
     coverage_cbar.ax.tick_params(labelsize=6, pad=1)
     coverage_cbar.set_ticks([0, 10])
     coverage_cbar.ax.set_xlabel("Cov", fontsize=6, labelpad=-3)
-
-    # Fraction modified legend (0-100 gradient)
-    fraction_ax = _legend_axes(2)
-    fraction_cbar = plt.colorbar(
-        ScalarMappable(norm=fraction_norm, cmap="Greys"),
-        cax=fraction_ax,
-        orientation="horizontal",
-    )
-    fraction_cbar.ax.tick_params(labelsize=6, pad=1)
-    fraction_cbar.set_ticks([0, 100])
-    fraction_cbar.ax.set_xlabel("Frac%", fontsize=6, labelpad=-3)
 
 
 def create_summary_plot(
@@ -176,31 +237,6 @@ def create_summary_plot(
     panel_height: float = 2.0,
     figure_width: float = 12.0,
 ) -> Path:
-    """Create a vertically stacked summary plot of the centrodip results.
-
-    Parameters
-    ----------
-    regions_per_chrom:
-        Dictionary mapping chromosome names to region coordinate lists as
-        produced by :class:`~centrodip.parse.Parser`.
-    methylation_per_region:
-        Dictionary of methylation metrics per region key from
-        :class:`~centrodip.dip_detect.DipDetector`.
-    dip_results:
-        Dictionary containing dip coordinates per region key returned by the
-        detector.
-    output_path:
-        File path where the generated figure will be written.
-    panel_height:
-        Height of each chromosome subplot in inches. Defaults to ``3``.
-    figure_width:
-        Width of the full figure in inches. Defaults to ``12``.
-
-    Returns
-    -------
-    Path
-        The path where the plot image was written.
-    """
 
     chromosomes: List[str] = []
     for chrom, coords in regions_per_chrom.items():
@@ -224,7 +260,6 @@ def create_summary_plot(
     )
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
-    fraction_norm = Normalize(vmin=0, vmax=100, clip=True)
 
     for axis_row, chrom in zip(axes, chromosomes):
         ax = axis_row[0]
@@ -253,35 +288,58 @@ def create_summary_plot(
                 start,
                 end,
                 "valid_coverage",
-                1,
-                2,
+                1.0,
+                1.5,
                 coverage_norm,
             )
-            _plot_band(
+            _plot_fraction_line(
                 ax,
                 record,
                 start,
                 end,
-                "fraction_modified",
-                2,
-                3,
-                fraction_norm,
             )
 
             _plot_dips(ax, dip_results.get(region_key, {}))
 
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(0, 4)
-        ax.set_yticks([0.5, 1.5, 2.5, 3.5])
+        ax.set_yticks([0.5, 1.25, 2.25, 3.25])
         ax.set_yticklabels([
             "Regions",
             "Coverage",
-            "% FracMod",
+            "FracMod",
             "Dips",
         ])
         ax.set_ylabel(f"{chrom}")
+        ax.tick_params(axis=u'y', which=u'both', length=0)
         ax.grid(False)
-        _add_track_legends(ax, coverage_norm, fraction_norm)
+        _add_track_legends(ax, coverage_norm)
+
+        ax.axhline(
+            y=1.75,
+            color="gray",
+            linestyle="--",
+            linewidth=0.5,
+            alpha=0.5,
+        )
+        ax.axhline(
+            y=2.75,
+            color="gray",
+            linestyle="--",
+            linewidth=0.5,
+            alpha=0.5,
+        )
+
+        secax = ax.secondary_yaxis(
+            "right",
+            functions=(
+                lambda y: (np.asarray(y) - 1.75) * 100.0,
+                lambda p: np.asarray(p) / 100.0 + 1.75,
+            ),
+        )
+        secax.set_yticks([0, 50, 100])
+        secax.set_yticklabels(["0%", "50%", "100%"])
+        secax.set_ylabel("")
 
     axes[-1][0].set_xlabel("Genomic position (bp)")
 
