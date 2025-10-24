@@ -136,7 +136,7 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
-        default=5000,
+        default=-1,
         help="Minimum dip size in base pairs. (default: 5000)",
     )
     dip_filter_group.add_argument(

@@ -188,7 +188,15 @@ def _plot_regions(ax: plt.Axes, regions: Iterable[Tuple[int, int]]) -> None:
         ax.add_patch(rect)
 
 
-def _plot_dips(ax: plt.Axes, dips: DipRecord) -> None:
+def _plot_dips(
+    ax: plt.Axes,
+    dips: DipRecord,
+    *,
+    y_bottom: float = 3.0,
+    height: float = 0.5,
+    color: str = "black",
+    alpha: float = 0.7,
+) -> None:
     starts = dips.get("starts", []) if dips else []
     ends = dips.get("ends", []) if dips else []
 
@@ -197,11 +205,11 @@ def _plot_dips(ax: plt.Axes, dips: DipRecord) -> None:
         end = int(end)
         left, right = _normalise_interval(start, end)
         rect = Rectangle(
-            (left, 3),
+            (left, y_bottom),
             right - left,
-            0.5,
-            facecolor="black",
-            alpha=0.7,
+            height,
+            facecolor=color,
+            alpha=alpha,
             edgecolor="none",
         )
         ax.add_patch(rect)
@@ -234,6 +242,7 @@ def create_summary_plot(
     dip_results: DipDict,
     output_path: Path | str,
     *,
+    unfiltered_dip_results: DipDict | None = None,
     panel_height: float = 2.0,
     figure_width: float = 12.0,
 ) -> Path:
@@ -260,6 +269,8 @@ def create_summary_plot(
     )
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
+
+    plot_unfiltered = unfiltered_dip_results is not None
 
     for axis_row, chrom in zip(axes, chromosomes):
         ax = axis_row[0]
@@ -299,17 +310,50 @@ def create_summary_plot(
                 end,
             )
 
-            _plot_dips(ax, dip_results.get(region_key, {}))
+            if plot_unfiltered:
+                unfiltered_record = (
+                    unfiltered_dip_results.get(region_key, {})
+                    if unfiltered_dip_results
+                    else {}
+                )
+                _plot_dips(
+                    ax,
+                    unfiltered_record,
+                    y_bottom=3.6,
+                    height=0.35,
+                    color="tab:blue",
+                    alpha=0.4,
+                )
+
+            _plot_dips(
+                ax,
+                dip_results.get(region_key, {}),
+                y_bottom=3.0,
+                height=0.5,
+                color="black",
+                alpha=0.7,
+            )
 
         ax.set_xlim(x_min, x_max)
-        ax.set_ylim(0, 4)
-        ax.set_yticks([0.5, 1.25, 2.25, 3.25])
-        ax.set_yticklabels([
-            "Regions",
-            "Coverage",
-            "FracMod",
-            "Dips",
-        ])
+        if plot_unfiltered:
+            ax.set_ylim(0, 4.2)
+            ax.set_yticks([0.5, 1.25, 2.25, 3.25, 3.775])
+            ax.set_yticklabels([
+                "Regions",
+                "Coverage",
+                "FracMod",
+                "Filtered dips",
+                "Unfiltered dips",
+            ])
+        else:
+            ax.set_ylim(0, 4)
+            ax.set_yticks([0.5, 1.25, 2.25, 3.25])
+            ax.set_yticklabels([
+                "Regions",
+                "Coverage",
+                "FracMod",
+                "Dips",
+            ])
         ax.set_ylabel(f"{chrom}")
         ax.tick_params(axis=u'y', which=u'both', length=0)
         ax.grid(False)
@@ -329,6 +373,14 @@ def create_summary_plot(
             linewidth=0.5,
             alpha=0.5,
         )
+        if plot_unfiltered:
+            ax.axhline(
+                y=3.5,
+                color="gray",
+                linestyle="--",
+                linewidth=0.5,
+                alpha=0.5,
+            )
 
         secax = ax.secondary_yaxis(
             "right",
