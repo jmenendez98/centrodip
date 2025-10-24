@@ -253,6 +253,7 @@ def main() -> None:
             regions_per_chrom=regions,
             methylation_per_region=methylation,
             dip_results=dips_filtered,
+            unfiltered_dip_results=dips,
             output_path=summary_path,
         )
 

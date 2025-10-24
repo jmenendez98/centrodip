@@ -196,6 +196,7 @@ def _plot_dips(
     height: float = 0.5,
     color: str = "black",
     alpha: float = 0.7,
+    zorder: float | None = None,
 ) -> None:
     starts = dips.get("starts", []) if dips else []
     ends = dips.get("ends", []) if dips else []
@@ -211,6 +212,7 @@ def _plot_dips(
             facecolor=color,
             alpha=alpha,
             edgecolor="none",
+            zorder=zorder,
         )
         ax.add_patch(rect)
 
@@ -270,7 +272,7 @@ def create_summary_plot(
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
 
-    plot_unfiltered = unfiltered_dip_results is not None
+    plot_unfiltered = bool(unfiltered_dip_results)
 
     for axis_row, chrom in zip(axes, chromosomes):
         ax = axis_row[0]
@@ -310,6 +312,16 @@ def create_summary_plot(
                 end,
             )
 
+            _plot_dips(
+                ax,
+                dip_results.get(region_key, {}),
+                y_bottom=3.0,
+                height=0.5,
+                color="black",
+                alpha=0.7,
+                zorder=2,
+            )
+
             if plot_unfiltered:
                 unfiltered_record = (
                     unfiltered_dip_results.get(region_key, {})
@@ -323,16 +335,8 @@ def create_summary_plot(
                     height=0.35,
                     color="tab:blue",
                     alpha=0.4,
+                    zorder=3,
                 )
-
-            _plot_dips(
-                ax,
-                dip_results.get(region_key, {}),
-                y_bottom=3.0,
-                height=0.5,
-                color="black",
-                alpha=0.7,
-            )
 
         ax.set_xlim(x_min, x_max)
         if plot_unfiltered:
@@ -373,14 +377,6 @@ def create_summary_plot(
             linewidth=0.5,
             alpha=0.5,
         )
-        if plot_unfiltered:
-            ax.axhline(
-                y=3.5,
-                color="gray",
-                linestyle="--",
-                linewidth=0.5,
-                alpha=0.5,
-            )
 
         secax = ax.secondary_yaxis(
             "right",
