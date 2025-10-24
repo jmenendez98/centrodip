@@ -4,8 +4,10 @@ import argparse
 import os
 from typing import Dict, Iterable, List
 
-from .parse import Parser
-from .dip_detect import DipDetector
+from .load_data import DataHandler
+from .detect_dips import detectDips
+
+
 from .dip_filter import DipFilter
 from .plot import create_summary_plot
 
@@ -110,8 +112,8 @@ def main() -> None:
     dip_detect_group.add_argument(
         "--window-size",
         type=int,
-        default=101,
-        help="Number of CpGs to include in Savitzky-Golay filtering of Fraction Modified. (default: 101)",
+        default=10000,
+        help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
     dip_detect_group.add_argument(
         "--sensitivity",
@@ -181,27 +183,30 @@ def main() -> None:
     args = argparser.parse_args()
     output_prefix = os.path.splitext(args.output)[0]
 
-    # Create Parser instance
-    parse = Parser(
+    # -- load data --
+    input_data = DataHandler(
+        regions_path=args.regions,
+        methylation_path=args.bedmethyl,
         mod_code=args.mod_code,
         bedgraph=args.bedgraph,
-    )
-    # Read in regions BED file and BEDMethyl File
-    methylation, regions = parse.process_files(
-        methylation_path=args.bedmethyl,
-        regions_path=args.regions
+        smooth_window_bp=args.window_size,
+        threads=args.threads,
+        debug=args.debug,
     )
 
-    # Create DipDetector class instance
-    detector = DipDetector(
-        window_size=args.window_size,
+    # print(input_data.region_dict.keys())
+    print(input_data.methylation_dict['chrX_MATERNAL:57866525-60979767'].keys())
+    # -> dict_keys(['position', 'fraction_modified', 'valid_coverage', 'lowess_fraction_modified', 'lowess_fraction_modified_dy'])
+
+    # -- detect dips --
+    raw_dips = detectDips(
         sensitivity=args.sensitivity,
         edge_sensitivity=args.edge_sensitivity,
         enrichment=args.enrichment,
         threads=args.threads,
         debug=args.debug,
     )
-
+    '''
     # call the dips, here you have them all before filtering
     dips, methylation = detector.dip_detect_all_chromosome(
         methylation_per_region=methylation, 
@@ -256,6 +261,7 @@ def main() -> None:
             unfiltered_dip_results=dips,
             output_path=summary_path,
         )
+    '''
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import warnings
 import numpy as np
 import os
 
+
 RegionDict = Dict[str, Dict[str, List[int]]]
 MethylationDict = Dict[str, Dict[str, List[float]]]
 
@@ -91,11 +92,17 @@ def _smooth_region_task(args: Tuple[List[int], List[float], int]) -> List[float]
     """
     positions, fractions, window_bp = args
     if not positions:
-        return []
+        return [], []
+
     x = np.asarray(positions, dtype=float)
     y = np.asarray(fractions, dtype=float)
+
+    # x is already sorted by caller; keep it that way
     y_sm = lowess_smooth_bp(y, x, window_bp)
-    return y_sm.tolist()
+    # dy/dx in genomic units (per base pair)
+    dy_sm = np.gradient(y_sm, x, edge_order=2)
+
+    return y_sm.tolist(), dy_sm.tolist()
 
 
 class DataHandler:
@@ -114,6 +121,7 @@ class DataHandler:
         self.bedgraph = bedgraph
 
         self.smooth_window_bp = smooth_window_bp
+        self.threads = threads
 
         if debug:
             print(f"[DEBUG] Reading regions from {regions_path}...")
@@ -123,7 +131,7 @@ class DataHandler:
 
         if debug:
             print(f"[DEBUG] Reading methylation from {methylation_path}...")
-        self.methylation_dict = self.read_and_filter_methylation(
+        self.methylation_dict = self.read_methylation_bed(
             methylation_path,
             self.region_dict,
         )
@@ -159,7 +167,7 @@ class DataHandler:
 
         return region_dict
     
-    def read_and_filter_methylation(
+    def read_methylation_bed(
         self,
         methylation_path: Path | str,
         region_dict: RegionDict,
@@ -249,7 +257,7 @@ class DataHandler:
             return
 
         # Use processes for CPU-bound smoothing; allow caller to override worker count
-        max_workers = self.max_workers or os.cpu_count() or 1
+        max_workers = self.threads or os.cpu_count() or 1
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as ex:
             fut_to_key = {
                 ex.submit(_smooth_region_task, task): key
@@ -257,5 +265,6 @@ class DataHandler:
             }
             for fut in concurrent.futures.as_completed(fut_to_key):
                 key = fut_to_key[fut]
-                y_sm = fut.result()
+                y_sm, dy_sm = fut.result()
                 self.methylation_dict[key]["lowess_fraction_modified"] = y_sm
+                self.methylation_dict[key]["lowess_fraction_modified_dy"] = dy_sm

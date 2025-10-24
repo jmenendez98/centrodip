@@ -29,14 +29,15 @@ def _empty_dip_record() -> Dict[str, List]:
 class DipDetector:
     def __init__(
         self,
-        window_size,
+        cpg_positions: List[int],
+        smoothed_fraction_modified: List[float],
+        smoothed_derivative: List[float],
         sensitivity,
         edge_sensitivity,
         enrichment,
         threads,
         debug: bool = False,
     ) -> None:
-        self.window_size = window_size
         self.sensitivity = sensitivity
         self.edge_sensitivity = edge_sensitivity
 
@@ -44,6 +45,12 @@ class DipDetector:
 
         self.threads = threads
         self.debug = debug
+
+        dip_centers = self.detect_dips(np.asarray(smoothed_fraction_modified, dtype=float))
+        dip_edges = self.detect_dips(np.asarray(smoothed_derivative, dtype=float))
+
+        print(len(dip_centers))
+        print(len(dip_edges))
 
     @staticmethod
     def _effective_window_length(length: int, requested: int) -> int | None:
@@ -67,30 +74,6 @@ class DipDetector:
             "fraction_modified": list(record.get("fraction_modified", [])),
             "valid_coverage": list(record.get("valid_coverage", [])),
         }
-
-    def _smooth_chromosome(self, values: List[float]) -> Tuple[np.ndarray, np.ndarray]:
-        data = np.asarray(values, dtype=float)
-        if data.size == 0:
-            return np.array([], dtype=float), np.array([], dtype=float)
-
-        window = self._effective_window_length(data.size, self.window_size)
-        if window is None or window > data.size:
-            return data.copy(), np.zeros_like(data, dtype=float)
-
-        smoothed = signal.savgol_filter(
-            x=data,
-            window_length=window,
-            polyorder=2,
-            mode="mirror",
-        )
-        derivative = signal.savgol_filter(
-            x=data,
-            window_length=window,
-            polyorder=2,
-            deriv=1,
-            mode="mirror",
-        )
-        return smoothed, derivative
 
     def _build_chromosome_arrays(
         self,
@@ -141,45 +124,28 @@ class DipDetector:
         }
         return region_data
 
+    def find_dip_centers(self, smoothed_methylation: np.ndarray) -> np.ndarray:
+        '''Identify dip centers in the smoothed methylation data.'''
 
-    def detect_dips(self, methylation: MethylationRecord) -> np.ndarray:
-        data = np.asarray(methylation.get("savgol_frac_mod", []), dtype=float)
-        dy = np.abs( np.asarray(methylation.get("savgol_frac_mod_dy", []), dtype=float) )
-
-        if data.size == 0:
+        if smoothed_methylation.size == 0:
             return np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=int)
 
-        data_range = float(np.max(data) - np.min(data)) if data.size else 0.0
-        dy_range = float(np.max(dy) - np.min(dy)) if dy.size else 0.0
-
+        data_range = float(np.max(smoothed_methylation) - np.min(smoothed_methylation)) if smoothed_methylation.size else 0.0
         data_prominence_threshold = self.sensitivity * data_range
-        dy_prominence_threshold = self.edge_sensitivity * dy_range
 
         if self.enrichment:
             centers, _ = signal.find_peaks(
-                data,
+                smoothed_methylation,
                 prominence=data_prominence_threshold,
-                wlen=data.size if data.size else None,
+                wlen=smoothed_methylation.size if smoothed_methylation.size else None,
             )
-            edges, _ = signal.find_peaks(
-                np.abs(dy),
-                prominence=dy_prominence_threshold,
-                wlen=data.size // 10 if data.size else None,
-            )        
         else:
             centers, _ = signal.find_peaks(
-                -data,
+                -smoothed_methylation,
                 prominence=data_prominence_threshold,
-                wlen=data.size if data.size else None,
+                wlen=smoothed_methylation.size if smoothed_methylation.size else None,
             )
-            edges, _ = signal.find_peaks(
-                np.abs(dy),
-                prominence=dy_prominence_threshold,
-                # wlen=data.size if data.size else None,
-                wlen=data.size // 10 if data.size else None,
-            )
-
-        return centers, edges
+        return centers
 
     def extend_dips(
         self,
