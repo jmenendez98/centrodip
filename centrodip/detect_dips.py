@@ -21,6 +21,7 @@ def detectDips(
     methylation_data: Dict[str, MethylationRecord],
     regions_data: Dict[str, RegionRecord],
     sensitivity: float = 0.667,
+    dip_width: float = 11,
     enrichment: bool = False,
     threads: int = 1,
     debug: bool = False,
@@ -31,6 +32,7 @@ def detectDips(
         methylation_data=methylation_data,
         regions_data=regions_data,
         sensitivity=sensitivity,
+        dip_width=dip_width,
         enrichment=enrichment,
         threads=threads,
         debug=debug,
@@ -45,7 +47,7 @@ class DipDetector:
         methylation_data: Dict[str, MethylationRecord],
         regions_data: Dict[str, RegionRecord],
         sensitivity: float = 0.667,
-        edge_sensitivity: float = 0.5,
+        dip_width: float = 11,
         enrichment: bool = False,
         threads: int = 1,
         debug: bool = False,
@@ -54,6 +56,7 @@ class DipDetector:
         self.regions_data = regions_data
 
         self.sensitivity = float(sensitivity)
+        self.dip_width = float(dip_width)
         self.enrichment = bool(enrichment)
 
         self.threads = max(int(threads), 1)
@@ -155,10 +158,8 @@ class DipDetector:
             dip_record["dip_edges"] = []
             return dip_record
 
-
         centers = self.find_dip_centers(smoothed)
-
-        edges = self.find_dip_edges(derivative)
+        edges = self.find_potential_dip_edges(derivative, centers)
 
         dip_record = self.extend_dips(
             cpg_sites=cpg_sites,
@@ -191,6 +192,7 @@ class DipDetector:
         peak_kwargs = {}
         if data_prominence_threshold > 0:
             peak_kwargs["prominence"] = data_prominence_threshold
+            peak_kwargs["width"] = self.dip_width
         if self.enrichment:
             centers, _ = signal.find_peaks(smoothed_methylation, **peak_kwargs)
         else:
@@ -198,14 +200,29 @@ class DipDetector:
 
         return centers.astype(int)
 
-    def find_dip_edges(self, smoothed_methylation_dy: np.ndarray) -> np.ndarray:
-        """Return the dip edges for a single region."""
+    def find_potential_dip_edges(
+        self,
+        smoothed_methylation_dy: np.ndarray,
+        centers: np.ndarray,
+        include_zero: bool = True,  # treat 0 as part of the run
+    ) -> np.ndarray:
+        """Return dip edge indices in the smoothed methylation dy."""
+        smoothed_methylation_dy = np.abs(smoothed_methylation_dy)
+
         if smoothed_methylation_dy.size == 0:
             return np.array([], dtype=int)
 
-        # call the dip edges
-        edges, _ = signal.find_peaks(np.abs(smoothed_methylation_dy))
-        edges = np.asarray(np.unique(edges), dtype=int)
+        data_range = float(np.max(smoothed_methylation_dy) - np.min(smoothed_methylation_dy))
+        data_prominence_threshold = max(0.1 * data_range, 0.0)
+
+        # call potential dip edges
+        peak_kwargs = {}
+        if data_prominence_threshold > 0:
+            peak_kwargs["prominence"] = data_prominence_threshold
+
+        peak_kwargs["width"] = self.dip_width
+
+        edges, _ = signal.find_peaks(smoothed_methylation_dy, **peak_kwargs)
 
         return edges.astype(int)
 
@@ -225,34 +242,15 @@ class DipDetector:
         if centers_arr.size == 0:
             return _empty_dip_record()
 
-        dip_bounds: List[Tuple[int, int]] = []
-
-        for center in centers_arr:
-            if center < 0 or center >= cpg_sites.size:
-                continue
-
-            left_candidates = edges_arr[edges_arr <= center]
-            right_candidates = edges_arr[edges_arr >= center]
-
-            if left_candidates.size == 0 and right_candidates.size == 0:
-                left_idx = right_idx = int(center)
-            else:
-                left_idx = int(left_candidates[-1]) if left_candidates.size else int(center)
-                right_idx = int(right_candidates[0]) if right_candidates.size else int(center)
-
-            left_idx = max(0, min(left_idx, cpg_sites.size - 1))
-            right_idx = max(0, min(right_idx, cpg_sites.size - 1))
-
-            if right_idx < left_idx:
-                left_idx, right_idx = right_idx, left_idx
-
-            dip_bounds.append((left_idx, right_idx))
-
         dips = _empty_dip_record()
-        for left_idx, right_idx in dip_bounds:
-            dips["starts"].append(int(cpg_sites[left_idx]))
-            dips["ends"].append(int(cpg_sites[right_idx]))
+        for center_i in centers_arr:
+            # subset edges to those flanking the center
+            cur_lefts = edges_arr[edges_arr < center_i]
+            left_i = np.argmax(cur_lefts) if cur_lefts.size > 0 else 0
+            cur_rights = edges_arr[edges_arr > center_i]
+            right_i = np.argmin(cur_rights) if cur_rights.size > 0 else len(cpg_sites) - 1
 
-
+            dips["starts"].append(int(cpg_sites[left_i]))
+            dips["ends"].append(int(cpg_sites[right_i]))
 
         return dips

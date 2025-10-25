@@ -57,6 +57,12 @@ def main() -> None:
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
+        "--dip-width",
+        type=zero_to_one_float,
+        default=11,
+        help="Width used for dip detection. Higher values require wider dips. (default: 11)",
+    )
+    dip_detect_group.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
@@ -160,6 +166,7 @@ def main() -> None:
         methylation_data=input_data.methylation_dict,
         regions_data=input_data.region_dict,
         sensitivity=args.sensitivity,
+        dip_width=args.dip_width,
         enrichment=args.enrichment,
         threads=args.threads,
         debug=args.debug,

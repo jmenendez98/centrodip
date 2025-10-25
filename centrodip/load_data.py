@@ -15,55 +15,44 @@ MethylationDict = Dict[str, Dict[str, List[float]]]
 
 
 # ---------- LOWESS (bp-window) at module scope so it's picklable ----------
-def lowess_smooth_bp(y: np.ndarray, x: np.ndarray, window_bp: int) -> np.ndarray:
-    """
-    Basic LOWESS with a basepair-sized window centered at each x[i].
-    Weighted linear regression with tricube kernel; no robust reweighting.
-    Assumes x is sorted ascending.
-    """
-    y = np.asarray(y, dtype=float)
-    x = np.asarray(x, dtype=float)
+def lowess_smooth(y, x, window_bp):
+    y = np.asarray(y, float)
+    x = np.asarray(x, float)
     n = len(y)
     if n == 0:
-        return np.array([], dtype=float)
+        return np.array([], float), np.array([], float)
 
     half = float(window_bp) / 2.0
-    ys = np.empty(n, dtype=float)
+    ys = np.empty(n, float)
+    dydx = np.empty(n, float)
 
-    left = 0
-    right = 0
+    left = right = 0
     for i in range(n):
         xi = x[i]
-
-        # expand right boundary while within +half
-        while right < n and (x[right] - xi) <= half:
-            right += 1
-        # advance left boundary while outside -half
-        while left < n and (xi - x[left]) > half:
-            left += 1
+        while right < n and (x[right] - xi) <= half: right += 1
+        while left  < n and (xi - x[left])  >  half: left  += 1
 
         sl = slice(left, right)
-        xs = x[sl]
-        ys_win = y[sl]
-
+        xs = x[sl]; ys_win = y[sl]
         m = np.isfinite(xs) & np.isfinite(ys_win)
         if m.sum() < 2:
             ys[i] = y[i]
+            # fallback: centered finite-diff if possible
+            if 0 < i < n-1:
+                dydx[i] = (y[i+1]-y[i-1]) / (x[i+1]-x[i-1])
+            else:
+                dydx[i] = 0.0
             continue
 
-        xs = xs[m]
-        ys_loc = ys_win[m]
-
-        dist = np.abs(xs - xi)
-        dmax = dist.max()
+        xs = xs[m]; ys_loc = ys_win[m]
+        dist = np.abs(xs - xi); dmax = dist.max()
         if dmax == 0:
-            ys[i] = ys_loc.mean()
+            ys[i] = ys_loc.mean(); dydx[i] = 0.0
             continue
 
-        # tricube weights
-        w = (1.0 - (dist / dmax) ** 3) ** 3
+        w = (1.0 - (dist / dmax)**3)**3  # tricube
 
-        # weighted linear regression: y ~ b0 + b1 * x
+        # weighted LS for y ~ b0 + b1*x
         X0 = np.ones_like(xs)
         s00 = np.sum(w * X0 * X0)
         s01 = np.sum(w * X0 * xs)
@@ -73,15 +62,20 @@ def lowess_smooth_bp(y: np.ndarray, x: np.ndarray, window_bp: int) -> np.ndarray
 
         det = s00 * s11 - s01 * s01
         if det == 0:
-            ys[i] = ys_loc.mean()
+            ys[i] = ys_loc.mean(); dydx[i] = 0.0
             continue
 
         b0 = ( t0 * s11 - s01 * t1) / det
         b1 = (-t0 * s01 + s00 * t1) / det
 
-        ys[i] = b0 + b1 * xi
+        ys[i]   = b0 + b1 * xi      # LOWESS value
+        dydx[i] = b1                # LOWESS slope (clean derivative)
 
-    return ys
+    # simple edge fill for first/last if needed
+    if n >= 2:
+        dydx[0]  = dydx[1]
+        dydx[-1] = dydx[-2]
+    return ys, dydx
 
 
 def _smooth_region_task(args: Tuple[List[int], List[float], int]) -> List[float]:
@@ -97,13 +91,8 @@ def _smooth_region_task(args: Tuple[List[int], List[float], int]) -> List[float]
     x = np.asarray(positions, dtype=float)
     y = np.asarray(fractions, dtype=float)
 
-    y_sm = lowess_smooth_bp(y, x, window_bp)
-    dy_sm = np.gradient(y_sm, x, edge_order=2)
-
-    window = 11
-    if window > 1:
-        kernel = np.ones(window) / window
-        dy_sm = np.convolve(dy_sm, kernel, mode="same")
+    y_sm, dy_sm = lowess_smooth(y, x, window_bp)
+    # dy_sm = np.gradient(y_sm, x, edge_order=2)
 
     return y_sm.tolist(), dy_sm.tolist()
 
