@@ -70,23 +70,19 @@ def _generate_bedgraph_rows(
     rows.sort(key=lambda entry: (entry[0], int(entry[1])))
     return rows
 
-def _generate_dip_rows(
-    methylation_dict: Dict[str, Dict[str, List]],
-    peak_key: str,
-) -> List[List[str]]:
-    rows: List[List[str]] = []
-    for region, values in methylation_dict.items():
-        if not values:
-            continue
-        chrom = region.split(":", 1)[0]
-        for pos in values.get(peak_key, []) or []:
-            start = int(pos)
-            rows.append([chrom, str(start), str(start + 1)])
-    rows.sort(key=lambda entry: (entry[0], int(entry[1])))
-    return rows
 
 
 def main() -> None:
+    def zero_to_one_float(x):
+        """Type function for argparse to ensure 0 < x < 1."""
+        try:
+            x = float(x)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{x!r} is not a valid float")
+        if x <= 0.0 or x >= 1.0:
+            raise argparse.ArgumentTypeError(f"{x} not in range (0, 1)")
+        return x
+
     argparser = argparse.ArgumentParser(
         description="Process bedMethyl and region BED files to produce CDR predictions.",
     )
@@ -95,7 +91,7 @@ def main() -> None:
     argparser.add_argument("regions", type=str, help="Path to BED file of regions to search for dips")
     argparser.add_argument("output", type=str, help="Path to the output BED file")
 
-    parsing_group = argparser.add_argument_group('Parsing Options', 'Arguments related to how the BED files are parsed.')
+    parsing_group = argparser.add_argument_group('Input Options')
     parsing_group.add_argument(
         "--mod-code",
         type=str,
@@ -108,25 +104,25 @@ def main() -> None:
         default=False,
         help="Treat methylation input as a bedGraph. Takes Fraction Modified from the fourth column. (default: False)",
     )
-
-    dip_detect_group = argparser.add_argument_group('Dip Detection Options', 'Arguments related to how the dips are detected/extended.')
-    dip_detect_group.add_argument(
+    parsing_group.add_argument(
         "--window-size",
         type=int,
         default=10000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
+
+    dip_detect_group = argparser.add_argument_group('Dip Detection Options')
     dip_detect_group.add_argument(
         "--sensitivity",
-        type=float,
-        default=0.667,
-        help="Sensitivity required for a dip. Multiplied by the smoothed data range to determine the prominence required for a dip call. (default: 0.66)",
+        type=zero_to_one_float,
+        default=0.5,
+        help="Sensitivity of dip detection. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
         "--edge-sensitivity",
-        type=float,
-        default=0.5,
-        help="Sensitivity required for a edge. Multiplied by the smoothed dy range to determine the prominence required for a edge call. (default: 0.5)",
+        type=zero_to_one_float,
+        default=0.25,
+        help="Sensitivity of edge detection. Higher values require more pronounced edges, causing larger dip calls. (default: 0.1)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -135,7 +131,7 @@ def main() -> None:
         help="Find regions enriched (rather than depleted) for methylation.",
     )
 
-    dip_filter_group = argparser.add_argument_group('Dip Filtering Options', 'Arguments related to how the dips filtered/removed.')
+    dip_filter_group = argparser.add_argument_group('Dip Filtering Options')
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
@@ -160,7 +156,7 @@ def main() -> None:
         "--debug",
         action="store_true",
         default=False,
-        help="Dumps smooth methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
+        help="Dumps smoothed methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
     )
     other_arguments_group.add_argument(
         "--plot",
@@ -194,31 +190,34 @@ def main() -> None:
         threads=args.threads,
         debug=args.debug,
     )
-    
-    # print(input_data.region_dict.keys())
-    print(input_data.methylation_dict['chrX_MATERNAL:57866525-60979767'].keys())
-    # -> dict_keys(['position', 'fraction_modified', 'valid_coverage', 'lowess_fraction_modified', 'lowess_fraction_modified_dy'])
 
     # if debug is on, write out the smoothed values
     if args.debug:
-        smoothed_output = _generate_bedgraph_rows(input_data.methylation_dict, value_key="lowess_fraction_modified" )
-        _write_bed(f"{output_prefix}.debug.smooth_frac_mod.bedgraph", smoothed_output)
+        with open(f"{output_prefix}.debug.smooth_frac_mod.bedgraph", "w", encoding="utf-8") as handle:
+            for region, values in input_data.methylation_dict.items():
+                if not values:
+                    continue
+                chrom = region.split(":", 1)[0]
 
-        smoothed_dy_output = _generate_bedgraph_rows(input_data.methylation_dict, value_key="lowess_fraction_modified_dy" )
-        _write_bed(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", smoothed_dy_output)
+                assert len(values.get("position", [])) == len(values.get("lowess_fraction_modified", [])), "Error mismatch size in output data."
+                for i in range(len(values.get("position", []))):
+                    start = values["position"][i]
+                    frac_mod = values["lowess_fraction_modified"][i]
+                    handle.write(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
+
+        with open(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", "w", encoding="utf-8") as handle:
+            for region, values in input_data.methylation_dict.items():
+                if not values:
+                    continue
+                chrom = region.split(":", 1)[0]
+
+                assert len(values.get("position", [])) == len(values.get("lowess_fraction_modified_dy", [])), "Error mismatch size in output data."
+                for i in range(len(values.get("position", []))):
+                    start = values["position"][i]
+                    frac_mod = values["lowess_fraction_modified_dy"][i]
+                    handle.write(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
 
     # -- detect dips --
-    detector = DipDetector(
-        methylation_data=input_data.methylation_dict['chrX_MATERNAL:57866525-60979767'],
-        regions_data=input_data.region_dict['chrX_MATERNAL:57866525-60979767'],
-        sensitivity=args.sensitivity,
-        edge_sensitivity=args.edge_sensitivity,
-        enrichment=False,
-        threads=args.threads,
-        debug=args.debug,
-    )
-
-    '''
     raw_dips = detectDips(
         methylation_data=input_data.methylation_dict,
         regions_data=input_data.region_dict,
@@ -229,38 +228,37 @@ def main() -> None:
         debug=args.debug,
     )
 
-    # call the dips, here you have them all before filtering
-    dips, methylation = detector.dip_detect_all_chromosome(
-        methylation_per_region=methylation, 
-        regions_per_chrom=regions
-    )
-
+    # if debug is on, write out the dip centers and edges
     if args.debug:
-        debug_prefix = f"{output_prefix}.debug"
+        with open(f"{output_prefix}.debug.dip_centers.bed", "w", encoding="utf-8") as handle:
+            for region, values in raw_dips.items():
+                if not values:
+                    continue
+                chrom = region.split(":", 1)[0]
+                for pos in values.get("dip_centers", []) or []:
+                    start = int(pos)
+                    handle.write(f"{chrom}\t{start}\t{start + 1}\n")
 
-        savgol_rows = _generate_bedgraph_rows(
-            methylation,
-            value_key="savgol_frac_mod",
-        )
-        _write_bed(
-            f"{debug_prefix}.savgol_frac_mod.bedgraph",
-            savgol_rows,
-        )
+        with open(f"{output_prefix}.debug.dip_edges.bed", "w", encoding="utf-8") as handle:
+            for region, values in raw_dips.items():
+                if not values:
+                    continue
+                chrom = region.split(":", 1)[0]
+                for pos in values.get("dip_edges", []) or []:
+                    start = int(pos)
+                    handle.write(f"{chrom}\t{start}\t{start + 1}\n")  
 
-        savgol_dy_rows = _generate_bedgraph_rows(
-            methylation,
-            value_key="savgol_frac_mod_dy",
-        )
-        _write_bed(
-            f"{debug_prefix}.savgol_frac_mod_dy.bedgraph",
-            savgol_dy_rows,
-        )
+        with open(f"{output_prefix}.debug.no_filt_dips.bed", "w", encoding="utf-8") as handle:
+            for region, values in raw_dips.items():
+                if not values:
+                    continue
+                chrom = region.split(":", 1)[0]
 
-        centers_rows = _generate_dip_rows(dips, "dip_centers")
-        _write_bed(f"{debug_prefix}.dip_centers.bed", centers_rows)
-
-        dip_edge_rows = _generate_dip_rows(dips, "dip_edges")
-        _write_bed(f"{debug_prefix}.dip_edges.bed", dip_edge_rows)
+                assert len(values.get("starts", [])) == len(values.get("ends", [])), "Mismatched dip starts and ends lengths in debug output."
+                for i in range(len(values.get("starts", []))):
+                    start = values["starts"][i]
+                    end = values["ends"][i]
+                    handle.write(f"{chrom}\t{start}\t{end}\n")
 
     # Create DipFilter class instance
     dip_filter = DipFilter(
@@ -270,6 +268,7 @@ def main() -> None:
     # filter the dips
     dips_filtered = dip_filter.filter(dips)
 
+    '''
     # write filtered dips to output BED file
     dip_rows = _generate_output_rows(dips_filtered)
     _write_bed(args.output, dip_rows)
