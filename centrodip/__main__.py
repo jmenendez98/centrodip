@@ -6,70 +6,9 @@ from typing import Dict, Iterable, List
 
 from .load_data import DataHandler
 from .detect_dips import detectDips
+from .dip_filter import filterDips
 
-from .detect_dips import DipDetector
-
-from .dip_filter import DipFilter
 from .plot import create_summary_plot
-
-
-def _write_bed(output_file: str, rows: Iterable[List[str]]) -> None:
-    rows = list(rows)
-    if not rows:
-        return
-    with open(output_file, "w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write("\t".join(row) + "\n")
-
-def _value_at(values: Dict[str, List], key: str, idx: int, default: str) -> str:
-    items = values.get(key, [])
-    if idx < len(items):
-        return str(items[idx])
-    return default
-
-def _generate_output_rows(bed_dict: Dict[str, Dict[str, List]]) -> List[List[str]]:
-    rows: List[List[str]] = []
-    for region, values in bed_dict.items():
-        if not values:
-            continue
-        chrom = region.split(":", 1)[0]
-        starts = values.get("starts", [])
-        ends = values.get("ends", [])
-        length = min(len(starts), len(ends))
-        for idx in range(length):
-            row = [chrom]
-            row.append(str(starts[idx]))
-            row.append(str(ends[idx]))
-            row.append(_value_at(values, "names", idx, "."))
-            row.append(_value_at(values, "scores", idx, "0"))
-            row.append(_value_at(values, "strands", idx, "."))
-            row.append(_value_at(values, "thick_starts", idx, str(starts[idx])))
-            row.append(_value_at(values, "thick_ends", idx, str(ends[idx])))
-            row.append(_value_at(values, "item_rgbs", idx, "0,0,0"))
-            rows.append(row)
-    rows.sort(key=lambda entry: (entry[0], int(entry[1])))
-    return rows
-
-def _generate_bedgraph_rows(
-    methylation_dict: Dict[str, Dict[str, List]],
-    value_key: str,
-) -> List[List[str]]:
-    rows: List[List[str]] = []
-    for region, values in methylation_dict.items():
-        if not values:
-            continue
-        chrom = region.split(":", 1)[0]
-        positions = values.get("position", [])
-        metrics = values.get(value_key, [])
-        length = min(len(positions), len(metrics))
-        for idx in range(length):
-            start = int(positions[idx])
-            end = start + 1
-            metric = metrics[idx]
-            rows.append([chrom, str(start), str(end), str(metric)])
-    rows.sort(key=lambda entry: (entry[0], int(entry[1])))
-    return rows
-
 
 
 def main() -> None:
