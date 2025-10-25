@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List
 
 from .load_data import DataHandler
 from .detect_dips import detectDips
-from .dip_filter import filterDips
+from .filter_dips import filterDips
 
 from .plot import create_summary_plot
 
@@ -133,6 +133,7 @@ def main() -> None:
     # if debug is on, write out the smoothed values
     if args.debug:
         with open(f"{output_prefix}.debug.smooth_frac_mod.bedgraph", "w", encoding="utf-8") as handle:
+            lines = []
             for region, values in input_data.methylation_dict.items():
                 if not values:
                     continue
@@ -142,10 +143,13 @@ def main() -> None:
                 for i in range(len(values.get("position", []))):
                     start = values["position"][i]
                     frac_mod = values["lowess_fraction_modified"][i]
-                    handle.write(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
+                    lines.append(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
+            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+            handle.writelines(lines)
 
         with open(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", "w", encoding="utf-8") as handle:
             for region, values in input_data.methylation_dict.items():
+                lines = []
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
@@ -154,7 +158,9 @@ def main() -> None:
                 for i in range(len(values.get("position", []))):
                     start = values["position"][i]
                     frac_mod = values["lowess_fraction_modified_dy"][i]
-                    handle.write(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
+                    lines.append(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
+            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+            handle.writelines(lines)
 
     # -- detect dips --
     raw_dips = detectDips(
@@ -170,42 +176,63 @@ def main() -> None:
     # if debug is on, write out the dip centers and edges
     if args.debug:
         with open(f"{output_prefix}.debug.dip_centers.bed", "w", encoding="utf-8") as handle:
+            lines = []
             for region, values in raw_dips.items():
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
                 for pos in values.get("dip_centers", []) or []:
                     start = int(pos)
-                    handle.write(f"{chrom}\t{start}\t{start + 1}\n")
+                    lines.append(f"{chrom}\t{start}\t{start + 1}\n")
+            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+            handle.writelines(lines)
 
         with open(f"{output_prefix}.debug.dip_edges.bed", "w", encoding="utf-8") as handle:
+            lines = []
             for region, values in raw_dips.items():
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
                 for pos in values.get("dip_edges", []) or []:
                     start = int(pos)
-                    handle.write(f"{chrom}\t{start}\t{start + 1}\n")  
+                    lines.append(f"{chrom}\t{start}\t{start + 1}\n")
+            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+            handle.writelines(lines) 
 
         with open(f"{output_prefix}.debug.no_filt_dips.bed", "w", encoding="utf-8") as handle:
+            lines = []
             for region, values in raw_dips.items():
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
-
                 assert len(values.get("starts", [])) == len(values.get("ends", [])), "Mismatched dip starts and ends lengths in debug output."
                 for i in range(len(values.get("starts", []))):
                     start = values["starts"][i]
                     end = values["ends"][i]
-                    handle.write(f"{chrom}\t{start}\t{end}\n")
+                    lines.append(f"{chrom}\t{start}\t{end}\n")
+            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+            handle.writelines(lines)
 
-    # Create DipFilter class instance
-    dip_filter = DipFilter(
-        min_size=args.min_size,
+    # -- filter dips --
+    final_dips = filterDips(
+        dip_dict=raw_dips,
         cluster_distance=args.cluster_distance,
+        min_size=args.min_size,
     )
-    # filter the dips
-    dips_filtered = dip_filter.filter(dips)
+
+    with open(f"{output_prefix}.bed", "w", encoding="utf-8") as handle:
+        lines = []
+        for region, values in final_dips.items():
+            if not values:
+                continue
+            chrom = region.split(":", 1)[0]
+            assert len(values.get("starts", [])) == len(values.get("ends", [])), "Mismatched dip starts and ends lengths in debug output."
+            for i in range(len(values.get("starts", []))):
+                start = values["starts"][i]
+                end = values["ends"][i]
+                lines.append(f"{chrom}\t{start}\t{end}\t{args.label}\t0\t.\t{start}\t{end}\t{args.color}\n")
+        lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
+        handle.writelines(lines)
 
     '''
     # write filtered dips to output BED file
