@@ -160,6 +160,12 @@ class DipDetector:
 
         centers = self.find_dip_centers(smoothed)
         edges = self.find_potential_dip_edges(derivative, centers)
+        edges = self.correct_edges_in_slope_patches(
+            dy=derivative, 
+            centers=centers, 
+            edges=edges,
+            eps=1e-6,
+        )
 
         dip_record = self.extend_dips(
             cpg_sites=cpg_sites,
@@ -204,7 +210,6 @@ class DipDetector:
         self,
         smoothed_methylation_dy: np.ndarray,
         centers: np.ndarray,
-        include_zero: bool = True,  # treat 0 as part of the run
     ) -> np.ndarray:
         """Return dip edge indices in the smoothed methylation dy."""
         smoothed_methylation_dy = np.abs(smoothed_methylation_dy)
@@ -226,6 +231,101 @@ class DipDetector:
 
         return edges.astype(int)
 
+    def correct_edges_in_slope_patches(
+        dy: np.ndarray,
+        centers: Iterable[int],
+        edges: Iterable[int],
+        eps: float = 1e-6,          # hysteresis: treat |dy| <= eps as zero
+    ) -> np.ndarray:
+        dy = np.asarray(dy, dtype=float)
+        centers = np.asarray(list(centers), dtype=int)
+        edges = np.asarray(list(edges), dtype=int)
+
+        n = dy.size
+        if n == 0 or centers.size == 0:
+            return np.empty((0, 2), dtype=int)
+
+        # Sort once for efficient nearest-left / nearest-right queries
+        edges_sorted = np.sort(edges)
+        corrected = []
+
+        def _expand_patch_left(start_i: int, stop_before: int) -> Tuple[int, int]:
+            """Expand around start_i while dy <= +eps, capped at stop_before (exclusive)."""
+            # left bound
+            L = start_i
+            while L - 1 >= 0 and dy[L - 1] <= eps:
+                if (L - 1) >= 0:
+                    L -= 1
+                else:
+                    break
+            # right bound
+            R = start_i
+            while R + 1 < n and dy[R + 1] <= eps and (R + 1) < stop_before:
+                R += 1
+            # cap to not cross center: caller sets stop_before = center
+            R = min(R, stop_before - 1)
+            return L, R
+
+        def _expand_patch_right(start_i: int, start_after: int) -> Tuple[int, int]:
+            """Expand around start_i while dy >= -eps, capped at start_after (inclusive lower bound)."""
+            # left bound
+            L = start_i
+            while L - 1 >= 0 and dy[L - 1] >= -eps and (L - 1) > start_after:
+                L -= 1
+            # right bound
+            R = start_i
+            while R + 1 < n and dy[R + 1] >= -eps:
+                R += 1
+            # cap to not cross center: caller sets start_after = center
+            L = max(L, start_after + 1)
+            return L, R
+
+        for c in centers:
+            if c < 0 or c >= n:
+                continue
+
+            # ----- find nearest left/right candidate edges relative to c -----
+            # left: max edge < c
+            left_mask = edges_sorted < c
+            if np.any(left_mask):
+                left_i0 = edges_sorted[left_mask][-1]
+            else:
+                left_i0 = max(c - 1, 0)
+
+            # right: min edge > c
+            right_mask = edges_sorted > c
+            if np.any(right_mask):
+                right_i0 = edges_sorted[right_mask][0]
+            else:
+                right_i0 = min(c + 1, n - 1)
+
+            # ----- refine within slope patches -----
+            # LEFT patch: dy <= +eps, capped to < c
+            if left_i0 < c:
+                L, R = _expand_patch_left(left_i0, stop_before=c)
+                if L <= R:
+                    # argmin within [L, R]
+                    left_i = L + int(np.argmin(dy[L:R + 1]))
+                else:
+                    left_i = left_i0
+            else:
+                left_i = max(c - 1, 0)
+
+            # RIGHT patch: dy >= -eps, capped to > c
+            if right_i0 > c:
+                Lr, Rr = _expand_patch_right(right_i0, start_after=c)
+                if Lr <= Rr:
+                    # argmax within [Lr, Rr]
+                    right_i = Lr + int(np.argmax(dy[Lr:Rr + 1]))
+                else:
+                    right_i = right_i0
+            else:
+                right_i = min(c + 1, n - 1)
+
+            corrected.append((int(left_i), int(right_i)))
+
+        return np.asarray(corrected, dtype=int)
+
     def extend_dips(
         self,
         cpg_sites: np.ndarray,
@@ -246,9 +346,16 @@ class DipDetector:
         for center_i in centers_arr:
             # subset edges to those flanking the center
             cur_lefts = edges_arr[edges_arr < center_i]
-            left_i = np.argmax(cur_lefts) if cur_lefts.size > 0 else 0
+            if cur_lefts.size > 0:
+                left_i = int(cur_lefts.max())
+            else:
+                left_i = max(int(center_i), 0)
+
             cur_rights = edges_arr[edges_arr > center_i]
-            right_i = np.argmin(cur_rights) if cur_rights.size > 0 else len(cpg_sites) - 1
+            if cur_rights.size > 0:
+                right_i = int(cur_rights.min())
+            else:
+                right_i = min(int(center_i), len(cpg_sites) - 1)
 
             dips["starts"].append(int(cpg_sites[left_i]))
             dips["ends"].append(int(cpg_sites[right_i]))
