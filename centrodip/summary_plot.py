@@ -232,7 +232,7 @@ def centrodip_summary_plot(
     *,
     unfiltered_dips: DipDict | None = None,
     panel_height: float = 2.0,
-    figure_width: float = 12.0,
+    figure_width: float = 16.0,
 ) -> Path:
 
     chromosomes: List[str] = []
