@@ -7,8 +7,7 @@ from typing import Dict, Iterable, List
 from .load_data import DataHandler
 from .detect_dips import detectDips
 from .filter_dips import filterDips
-
-from .plot import create_summary_plot
+from .summary_plot import centrodip_summary_plot
 
 
 def main() -> None:
@@ -238,7 +237,7 @@ def main() -> None:
     # -- make summary plot --
     if args.plot:
         summary_path = f"{output_prefix}.centrodip_summary.png"
-        create_summary_plot(
+        centrodip_summary_plot(
             regions_per_chrom=input_data.region_dict,
             methylation_per_region=input_data.methylation_dict,
             final_dips=final_dips,
