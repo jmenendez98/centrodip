@@ -97,10 +97,13 @@ def _smooth_region_task(args: Tuple[List[int], List[float], int]) -> List[float]
     x = np.asarray(positions, dtype=float)
     y = np.asarray(fractions, dtype=float)
 
-    # x is already sorted by caller; keep it that way
     y_sm = lowess_smooth_bp(y, x, window_bp)
-    # dy/dx in genomic units (per base pair)
     dy_sm = np.gradient(y_sm, x, edge_order=2)
+
+    window = 11
+    if window > 1:
+        kernel = np.ones(window) / window
+        dy_sm = np.convolve(dy_sm, kernel, mode="same")
 
     return y_sm.tolist(), dy_sm.tolist()
 
