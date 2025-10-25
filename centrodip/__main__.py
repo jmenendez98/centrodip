@@ -220,6 +220,7 @@ def main() -> None:
         min_size=args.min_size,
     )
 
+    # write final dips to output BED file
     with open(f"{output_prefix}.bed", "w", encoding="utf-8") as handle:
         lines = []
         for region, values in final_dips.items():
@@ -234,21 +235,16 @@ def main() -> None:
         lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
         handle.writelines(lines)
 
-    '''
-    # write filtered dips to output BED file
-    dip_rows = _generate_output_rows(dips_filtered)
-    _write_bed(args.output, dip_rows)
-
+    # -- make summary plot --
     if args.plot:
-        summary_path = f"{output_prefix}.summary.png"
+        summary_path = f"{output_prefix}.centrodip_summary.png"
         create_summary_plot(
-            regions_per_chrom=regions,
-            methylation_per_region=methylation,
-            dip_results=dips_filtered,
-            unfiltered_dip_results=dips,
-            output_path=summary_path,
+            regions_per_chrom=input_data.region_dict,
+            methylation_per_region=input_data.methylation_dict,
+            final_dips=final_dips,
+            unfiltered_dips=raw_dips,
+            output_path=summary_path
         )
-    '''
 
 
 if __name__ == "__main__":
