@@ -21,7 +21,6 @@ def detectDips(
     methylation_data: Dict[str, MethylationRecord],
     regions_data: Dict[str, RegionRecord],
     sensitivity: float = 0.667,
-    edge_sensitivity: float = 0.5,
     enrichment: bool = False,
     threads: int = 1,
     debug: bool = False,
@@ -32,7 +31,6 @@ def detectDips(
         methylation_data=methylation_data,
         regions_data=regions_data,
         sensitivity=sensitivity,
-        edge_sensitivity=edge_sensitivity,
         enrichment=enrichment,
         threads=threads,
         debug=debug,
@@ -56,7 +54,6 @@ class DipDetector:
         self.regions_data = regions_data
 
         self.sensitivity = float(sensitivity)
-        self.edge_sensitivity = float(edge_sensitivity)
         self.enrichment = bool(enrichment)
 
         self.threads = max(int(threads), 1)
@@ -74,17 +71,13 @@ class DipDetector:
     def detect_all(self) -> DipResults:
         """Calculate dips for every chromosome/region in parallel."""
 
-        self._log("Starting dip detection across all regions.")
-
         if not self.methylation_data:
-            self._log("No methylation data provided; returning empty results.")
             self.dips = {}
             return {}
 
         results: DipResults = {}
 
         if self.threads > 1 and len(self.methylation_data) > 1:
-            self._log(f"Using ThreadPoolExecutor with {self.threads} workers.")
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
                 futures = {
                     executor.submit(self._detect_single_region, key, record): key
@@ -93,11 +86,9 @@ class DipDetector:
                 for future in concurrent.futures.as_completed(futures):
                     key = futures[future]
                     results[key] = future.result()
-                    self._log(f"Completed detection for {key}.")
         else:
             for key, record in self.methylation_data.items():
                 results[key] = self._detect_single_region(key, record)
-                self._log(f"Completed detection for {key}.")
 
         self.dips = results
         return results
@@ -145,7 +136,6 @@ class DipDetector:
         record: MethylationRecord,
     ) -> Dict[str, List[int]]:
         region_label = self._region_label(region_key)
-        self._log(f"Processing region {region_key} (chromosome {region_label}).")
 
         methylation_record = self._sort_region_record(self._copy_methylation_record(record))
 
@@ -160,21 +150,15 @@ class DipDetector:
         )
 
         if cpg_sites.size == 0:
-            self._log(f"Region {region_key} contains no CpG sites.")
             dip_record = _empty_dip_record()
             dip_record["dip_centers"] = []
             dip_record["dip_edges"] = []
             return dip_record
 
-        self._log(
-            f"Region {region_key}: {cpg_sites.size} CpG sites, starting dip computation."
-        )
 
         centers = self.find_dip_centers(smoothed)
-        self._log(f"Region {region_key}: identified {centers.size} dip centers.")
 
         edges = self.find_dip_edges(derivative)
-        self._log(f"Region {region_key}: identified {edges.size} dip edges.")
 
         dip_record = self.extend_dips(
             cpg_sites=cpg_sites,
@@ -193,10 +177,6 @@ class DipDetector:
             if 0 <= int(idx) < cpg_sites.size
         ]
 
-        self._log(
-            f"Region {region_key}: produced {len(dip_record['starts'])} dip intervals."
-        )
-
         return dip_record
 
     def find_dip_centers(self, smoothed_methylation: np.ndarray) -> np.ndarray:
@@ -206,11 +186,6 @@ class DipDetector:
             return np.array([], dtype=int)
         data_range = float(np.max(smoothed_methylation) - np.min(smoothed_methylation))
         data_prominence_threshold = max(self.sensitivity * data_range, 0.0)
-
-        self._log(
-            "Computing dip centers: "
-            f"n={smoothed_methylation.size}, prominence>={data_prominence_threshold:.6f}."
-        )
 
         # call the dip centers
         peak_kwargs = {}
@@ -225,22 +200,11 @@ class DipDetector:
 
     def find_dip_edges(self, smoothed_methylation_dy: np.ndarray) -> np.ndarray:
         """Return the dip edges for a single region."""
-        # get info on data range for prominence calculation
         if smoothed_methylation_dy.size == 0:
             return np.array([], dtype=int)
-        derivative_range = float(np.max(smoothed_methylation_dy) - np.min(smoothed_methylation_dy))
-        edge_prominence = max(self.edge_sensitivity * derivative_range, 0.0)
-
-        self._log(
-            "Computing dip edges: "
-            f"n={smoothed_methylation_dy.size}, prominence>={edge_prominence:.6f}."
-        )
 
         # call the dip edges
-        peak_kwargs = {}
-        if edge_prominence > 0:
-            peak_kwargs["prominence"] = edge_prominence
-        edges, _ = signal.find_peaks(np.abs(smoothed_methylation_dy), **peak_kwargs)
+        edges, _ = signal.find_peaks(np.abs(smoothed_methylation_dy))
         edges = np.asarray(np.unique(edges), dtype=int)
 
         return edges.astype(int)
@@ -289,8 +253,6 @@ class DipDetector:
             dips["starts"].append(int(cpg_sites[left_idx]))
             dips["ends"].append(int(cpg_sites[right_idx]))
 
-        self._log(
-            f"Extended {len(dip_bounds)} dip bounds into genomic coordinates."
-        )
+
 
         return dips
