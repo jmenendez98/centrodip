@@ -45,7 +45,7 @@ def main() -> None:
     parsing_group.add_argument(
         "--window-size",
         type=int,
-        default=10000,
+        default=25000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
 
@@ -53,13 +53,13 @@ def main() -> None:
     dip_detect_group.add_argument(
         "--sensitivity",
         type=zero_to_one_float,
-        default=0.5,
+        default=0.334,
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
         "--dip-width",
         type=zero_to_one_float,
-        default=11,
+        default=1,
         help="Width used for dip detection. Higher values require wider dips. (default: 11)",
     )
     dip_detect_group.add_argument(
@@ -73,13 +73,13 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
-        default=-1,
+        default=1000,
         help="Minimum dip size in base pairs. (default: 5000)",
     )
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
-        default=-1,
+        default=250000,
         help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: -1)",
     )
 
