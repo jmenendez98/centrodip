@@ -141,6 +141,7 @@ def _plot_band(
 def _plot_fraction_line(
     ax: plt.Axes,
     record: MethylationRecord,
+    column: str,
     region_start: int,
     region_end: int,
     *,
@@ -149,27 +150,12 @@ def _plot_fraction_line(
     linewidth: float = 1,
     alpha : float = 0.5,
 ) -> None:
-    positions, values = _ordered_positions(record, "fraction_modified")
+    positions, values = _ordered_positions(record, column)
     if not positions or not values:
         return
 
-    edges, means = _fraction_window_bins(
-        positions,
-        values,
-        region_start,
-        region_end,
-        window_size=window_size,
-    )
-    if edges.size < 2 or means.size == 0:
-        return
-
-    centres = (edges[:-1] + edges[1:]) / 2.0
-    mask = ~np.isnan(means)
-    if not np.any(mask):
-        return
-
-    y_values = 1.75 + np.asarray(means[mask], dtype=float) / 100.0
-    ax.plot(centres[mask], y_values, color=color, linewidth=linewidth, alpha=alpha)
+    y_values = 1.75 + np.asarray(values, dtype=float) / 100.0
+    ax.plot(positions, y_values, color=color, linewidth=linewidth, alpha=alpha)
 
 
 def _plot_regions(ax: plt.Axes, regions: Iterable[Tuple[int, int]]) -> None:
@@ -294,6 +280,8 @@ def centrodip_summary_plot(
         for start, end in regions:
             region_key = _region_key(chrom, start, end)
             record = methylation_per_region.get(region_key, {})
+
+            # plot coverage bar
             _plot_band(
                 ax,
                 record,
@@ -304,11 +292,27 @@ def centrodip_summary_plot(
                 1.5,
                 coverage_norm,
             )
+
+            # plot the raw fraction modified values as a line
             _plot_fraction_line(
-                ax,
-                record,
-                start,
-                end,
+                ax=ax,
+                record=record,
+                column="fraction_modified",
+                region_start=start,
+                region_end=end,
+                alpha=0.25,
+                color="black"
+            )
+
+            # plot the smoothed LOWESS fraction modified line
+            _plot_fraction_line(
+                ax=ax,
+                record=record,
+                column="lowess_fraction_modified",
+                region_start=start,
+                region_end=end,
+                alpha=0.75,
+                color="orange"
             )
 
             _plot_dips(
