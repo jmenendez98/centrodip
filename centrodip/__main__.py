@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List
 from .load_data import DataHandler
 from .detect_dips import detectDips
 
+from .detect_dips import DipDetector
 
 from .dip_filter import DipFilter
 from .plot import create_summary_plot
@@ -185,28 +186,49 @@ def main() -> None:
 
     # -- load data --
     input_data = DataHandler(
-        regions_path=args.regions,
         methylation_path=args.bedmethyl,
+        regions_path=args.regions,
         mod_code=args.mod_code,
         bedgraph=args.bedgraph,
         smooth_window_bp=args.window_size,
         threads=args.threads,
         debug=args.debug,
     )
-
+    
     # print(input_data.region_dict.keys())
     print(input_data.methylation_dict['chrX_MATERNAL:57866525-60979767'].keys())
     # -> dict_keys(['position', 'fraction_modified', 'valid_coverage', 'lowess_fraction_modified', 'lowess_fraction_modified_dy'])
 
+    # if debug is on, write out the smoothed values
+    if args.debug:
+        smoothed_output = _generate_bedgraph_rows(input_data.methylation_dict, value_key="lowess_fraction_modified" )
+        _write_bed(f"{output_prefix}.debug.smooth_frac_mod.bedgraph", smoothed_output)
+
+        smoothed_dy_output = _generate_bedgraph_rows(input_data.methylation_dict, value_key="lowess_fraction_modified_dy" )
+        _write_bed(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", smoothed_dy_output)
+
     # -- detect dips --
+    detector = DipDetector(
+        methylation_data=input_data.methylation_dict['chrX_MATERNAL:57866525-60979767'],
+        regions_data=input_data.region_dict['chrX_MATERNAL:57866525-60979767'],
+        sensitivity=args.sensitivity,
+        edge_sensitivity=args.edge_sensitivity,
+        enrichment=False,
+        threads=args.threads,
+        debug=args.debug,
+    )
+
+    '''
     raw_dips = detectDips(
+        methylation_data=input_data.methylation_dict,
+        regions_data=input_data.region_dict,
         sensitivity=args.sensitivity,
         edge_sensitivity=args.edge_sensitivity,
         enrichment=args.enrichment,
         threads=args.threads,
         debug=args.debug,
     )
-    '''
+
     # call the dips, here you have them all before filtering
     dips, methylation = detector.dip_detect_all_chromosome(
         methylation_per_region=methylation, 

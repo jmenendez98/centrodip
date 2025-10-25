@@ -1,23 +1,14 @@
 from __future__ import annotations
 
 import concurrent.futures
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Iterable, List, Tuple, Union
 
 import numpy as np
 from scipy import signal
 
 
-MethylationRecord = Dict[str, List[float]]
-RegionSlices = Dict[str, Tuple[int, int]]
-
-
-def _empty_methylation_record() -> MethylationRecord:
-    return {
-        "position": [],
-        "fraction_modified": [],
-        "valid_coverage": [],
-    }
-
+MethylationRecord = Dict[str, List[float | int]]
+RegionRecord = Dict[str, List[float | int]]
 
 def _empty_dip_record() -> Dict[str, List]:
     return {
@@ -25,47 +16,47 @@ def _empty_dip_record() -> Dict[str, List]:
         "ends": [],
     }
 
+def detectDips():
+    return 
 
 class DipDetector:
+    """Detect dips in methylation profiles."""
     def __init__(
         self,
-        cpg_positions: List[int],
-        smoothed_fraction_modified: List[float],
-        smoothed_derivative: List[float],
-        sensitivity,
-        edge_sensitivity,
-        enrichment,
-        threads,
+        methylation_data: Dict[str, MethylationRecord],
+        regions_data: Dict[str, RegionRecord],
+        sensitivity: float = 0.667,
+        edge_sensitivity: float = 0.5,
+        enrichment: bool = False,
+        threads: int = 1,
         debug: bool = False,
     ) -> None:
-        self.sensitivity = sensitivity
-        self.edge_sensitivity = edge_sensitivity
+        self.methylation_data = methylation_data
+        self.regions_data = regions_data
 
-        self.enrichment = enrichment
+        self.sensitivity = float(sensitivity)
+        self.edge_sensitivity = float(edge_sensitivity)
+        self.enrichment = bool(enrichment)
 
-        self.threads = threads
+        self.threads = int(threads)
         self.debug = debug
 
-        dip_centers = self.detect_dips(np.asarray(smoothed_fraction_modified, dtype=float))
-        dip_edges = self.detect_dips(np.asarray(smoothed_derivative, dtype=float))
+        self.dips: Dict[str, Dict[str, List[int]]] = {}
 
-        print(len(dip_centers))
-        print(len(dip_edges))
+        cpg_sites = np.array( self.methylation_data["position"], dtype=int )
 
-    @staticmethod
-    def _effective_window_length(length: int, requested: int) -> int | None:
-        """Return an odd Savitzky-Golay window length <= length."""
+        smoothed_methylation = np.array( self.methylation_data["lowess_fraction_modified"], dtype=float )
+        smoothed_methylation_dy = np.array( self.methylation_data["lowess_fraction_modified_dy"], dtype=float )
 
-        if length < 3:
-            return None
-        window = min(length if length % 2 == 1 else length - 1, requested)
-        if window < 3:
-            window = 3 if length >= 3 else None
-        if window is None:
-            return None
-        if window % 2 == 0:
-            window -= 1
-        return max(window, 3)
+        dip_centers = self.find_dip_centers(smoothed_methylation)
+        dip_edges = self.find_dip_edges(smoothed_methylation_dy)
+        dips = self.extend_dips(
+            cpg_sites=cpg_sites, 
+            centers=dip_centers, 
+            edges=dip_edges
+        )
+
+        print(dips)
 
     @staticmethod
     def _copy_methylation_record(record: Dict[str, Iterable]) -> MethylationRecord:
@@ -73,89 +64,75 @@ class DipDetector:
             "position": list(record.get("position", [])),
             "fraction_modified": list(record.get("fraction_modified", [])),
             "valid_coverage": list(record.get("valid_coverage", [])),
+            "lowess_fraction_modified": list(record.get("lowess_fraction_modified", [])),
+            "lowess_fraction_modified_dy": list(record.get("lowess_fraction_modified_dy", [])),
         }
 
-    def _build_chromosome_arrays(
-        self,
-        chrom: str,
-        region_keys: List[str],
-        region_records: Dict[str, MethylationRecord],
-    ) -> Tuple[MethylationRecord, RegionSlices]:
-        combined = _empty_methylation_record()
-        slices: RegionSlices = {}
+    @staticmethod
+    def _sort_region_record(record: MethylationRecord) -> MethylationRecord:
+        positions = record.get("position", [])
+        if not positions:
+            return record
 
-        for region_key in region_keys:
+        order = sorted(range(len(positions)), key=positions.__getitem__)
+        record["position"] = [positions[idx] for idx in order]
 
-            record = self._copy_methylation_record(region_records.get(region_key, {}))
-            positions = record["position"]
+        for key in (
+            "fraction_modified",
+            "valid_coverage",
+            "lowess_fraction_modified",
+            "lowess_fraction_modified_dy",
+        ):
+            values = record.get(key, [])
+            if len(values) == len(order):
+                record[key] = [values[idx] for idx in order]
 
-            if positions:
-                order = sorted(range(len(positions)), key=lambda idx: positions[idx])
-                positions = [positions[idx] for idx in order]
-                fraction_modified = [record["fraction_modified"][idx] for idx in order]
-                valid_coverage = [record["valid_coverage"][idx] for idx in order]
-            else:
-                fraction_modified = []
-                valid_coverage = []
-
-            start_idx = len(combined["position"])
-            combined["position"].extend(positions)
-            combined["fraction_modified"].extend(fraction_modified)
-            combined["valid_coverage"].extend(valid_coverage)
-            end_idx = len(combined["position"])
-            slices[region_key] = (start_idx, end_idx)
-
-
-        return combined, slices
-
-    def _slice_region(
-        self,
-        combined: MethylationRecord,
-        smoothed: np.ndarray,
-        derivative: np.ndarray,
-        slc: slice,
-    ) -> MethylationRecord:
-        region_data = {
-            "position": combined["position"][slc],
-            "fraction_modified": combined["fraction_modified"][slc],
-            "valid_coverage": combined["valid_coverage"][slc],
-            "savgol_frac_mod": smoothed[slc].tolist(),
-            "savgol_frac_mod_dy": derivative[slc].tolist(),
-        }
-        return region_data
+        return record
 
     def find_dip_centers(self, smoothed_methylation: np.ndarray) -> np.ndarray:
-        '''Identify dip centers in the smoothed methylation data.'''
-
+        """Return dip center indices in the smoothed methylation data."""
+        # get info on data range for prominence calculation
         if smoothed_methylation.size == 0:
-            return np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=int)
+            return np.array([], dtype=int)
+        data_range = float(np.max(smoothed_methylation) - np.min(smoothed_methylation))
+        data_prominence_threshold = max(self.sensitivity * data_range, 0.0)
 
-        data_range = float(np.max(smoothed_methylation) - np.min(smoothed_methylation)) if smoothed_methylation.size else 0.0
-        data_prominence_threshold = self.sensitivity * data_range
-
+        # call the dip centers
+        peak_kwargs = {}
+        if data_prominence_threshold > 0:
+            peak_kwargs["prominence"] = data_prominence_threshold
         if self.enrichment:
-            centers, _ = signal.find_peaks(
-                smoothed_methylation,
-                prominence=data_prominence_threshold,
-                wlen=smoothed_methylation.size if smoothed_methylation.size else None,
-            )
+            centers, _ = signal.find_peaks(smoothed_methylation, **peak_kwargs)
         else:
-            centers, _ = signal.find_peaks(
-                -smoothed_methylation,
-                prominence=data_prominence_threshold,
-                wlen=smoothed_methylation.size if smoothed_methylation.size else None,
-            )
-        return centers
+            centers, _ = signal.find_peaks(-smoothed_methylation, **peak_kwargs)
+
+        return centers.astype(int)
+
+    def find_dip_edges(self, smoothed_methylation_dy: np.ndarray) -> np.ndarray:
+        """Return the dip edges for a single region."""
+        # get info on data range for prominence calculation
+        if smoothed_methylation_dy.size == 0:
+            return np.array([], dtype=int)
+        derivative_range = float(np.max(smoothed_methylation_dy) - np.min(smoothed_methylation_dy))
+        edge_prominence = max(self.edge_sensitivity * derivative_range, 0.0)
+
+        # call the dip edges
+        peak_kwargs = {}
+        if edge_prominence > 0:
+            peak_kwargs["prominence"] = edge_prominence
+        edges, _ = signal.find_peaks(np.abs(smoothed_methylation_dy), **peak_kwargs)
+        edges = np.asarray(np.unique(edges), dtype=int)
+
+        return edges.astype(int)
 
     def extend_dips(
         self,
-        methylation: MethylationRecord,
+        cpg_sites: np.ndarray,
         centers: Iterable[int],
         edges: Iterable[int],
     ) -> Dict[str, List[int]]:
-
-        starts_m = np.asarray(methylation.get("position", []), dtype=int)
-        if starts_m.size == 0:
+        """Given dip centers and edges, return dip start and end positions."""
+        if cpg_sites.size == 0:
             return _empty_dip_record()
 
         centers_arr = np.asarray(list(centers), dtype=int)
@@ -167,7 +144,7 @@ class DipDetector:
         dip_bounds: List[Tuple[int, int]] = []
 
         for center in centers_arr:
-            if center < 0 or center >= starts_m.size:
+            if center < 0 or center >= cpg_sites.size:
                 continue
 
             left_candidates = edges_arr[edges_arr <= center]
@@ -179,8 +156,8 @@ class DipDetector:
                 left_idx = int(left_candidates[-1]) if left_candidates.size else int(center)
                 right_idx = int(right_candidates[0]) if right_candidates.size else int(center)
 
-            left_idx = max(0, min(left_idx, starts_m.size - 1))
-            right_idx = max(0, min(right_idx, starts_m.size - 1))
+            left_idx = max(0, min(left_idx, cpg_sites.size - 1))
+            right_idx = max(0, min(right_idx, cpg_sites.size - 1))
 
             if right_idx < left_idx:
                 left_idx, right_idx = right_idx, left_idx
@@ -189,145 +166,7 @@ class DipDetector:
 
         dips = _empty_dip_record()
         for left_idx, right_idx in dip_bounds:
-            dips["starts"].append(int(starts_m[left_idx]))
-            dips["ends"].append(int(starts_m[right_idx]))
+            dips["starts"].append(int(cpg_sites[left_idx]))
+            dips["ends"].append(int(cpg_sites[right_idx]))
 
         return dips
-
-    def _process_single_chromosome(
-        self,
-        chrom: str,
-        region_keys: List[str],
-        region_records: Dict[str, MethylationRecord],
-    ) -> Tuple[
-        Dict[str, Dict[str, List]],
-        Dict[str, MethylationRecord],
-        Dict[str, Union[int, str]],
-    ]:
-        combined, slices = self._build_chromosome_arrays(chrom, region_keys, region_records)
-        smoothed, derivative = self._smooth_chromosome(combined["fraction_modified"])
-
-        dip_results: Dict[str, Dict[str, List]] = {}
-        methylation_results: Dict[str, MethylationRecord] = {}
-
-        for region_key in region_keys:
-            start_idx, end_idx = slices.get(region_key, (0, 0))
-            slc = slice(start_idx, end_idx)
-            region_data = self._slice_region(combined, smoothed, derivative, slc)
-            methylation_results[region_key] = region_data
-
-            if (end_idx - start_idx) < self.window_size:
-                dip_results[region_key] = _empty_dip_record()
-                continue
-
-            centers, edges = self.detect_dips(region_data)
-            dip_results[region_key] = self.extend_dips(
-                methylation=region_data,
-                centers=centers,
-                edges=edges
-            )
-
-
-            if self.debug:
-                positions = region_data.get("position", [])
-                debug_payload = {
-                    "dip_centers": [positions[idx] for idx in centers if idx < len(positions)],
-                    "dip_edges": [positions[idx] for idx in edges if idx < len(positions)],
-                }
-                dip_results[region_key].update(debug_payload)
-
-        summary = {
-            "chrom": chrom,
-            "regions": len(region_keys),
-            "sites": sum(
-                len(methylation_results.get(region, {}).get("position", []))
-                for region in region_keys
-            ),
-            "dips": sum(
-                len(dip_results.get(region, {}).get("starts", []))
-                for region in region_keys
-            ),
-        }
-
-        if self.debug:
-            print(
-                f"[DEBUG] Chromosome {chrom}: {summary['regions']} regions, "
-                f"{summary['sites']} CpG sites, {summary['dips']} dips"
-            )
-
-        return dip_results, methylation_results, summary
-
-    def dip_detect_all_chromosome(
-        self,
-        methylation_per_region: Dict[str, MethylationRecord],
-        regions_per_chrom: Dict[str, Dict[str, List[int]]],
-    ) -> Tuple[Dict[str, Dict[str, List]], Dict[str, MethylationRecord]]:
-
-        chrom_inputs = []
-        for chrom, coords in regions_per_chrom.items():
-            region_keys = [
-                f"{chrom}:{start}-{end}"
-                for start, end in zip(coords.get("starts", []), coords.get("ends", []))
-            ]
-            if not region_keys:
-                continue
-            chrom_records = {
-                key: self._copy_methylation_record(methylation_per_region.get(key, {}))
-                for key in region_keys
-            }
-            chrom_inputs.append((chrom, region_keys, chrom_records))
-
-        dip_results: Dict[str, Dict[str, List]] = {}
-        methylation_results: Dict[str, MethylationRecord] = {}
-        overall_summary = {
-            "regions": 0,
-            "sites": 0,
-            "dips": 0,
-        }
-
-        if not chrom_inputs:
-            return dip_results, methylation_results
-
-        if self.threads <= 1 or len(chrom_inputs) == 1:
-            for chrom, region_keys, chrom_records in chrom_inputs:
-                dips, methylation, summary = self._process_single_chromosome(
-                    chrom, region_keys, chrom_records
-                )
-                dip_results.update(dips)
-                methylation_results.update(methylation)
-                overall_summary["regions"] += summary["regions"]
-                overall_summary["sites"] += summary["sites"]
-                overall_summary["dips"] += summary["dips"]
-            if self.debug:
-                print(
-                    f"[DEBUG] Overall: {overall_summary['regions']} regions, "
-                    f"{overall_summary['sites']} CpG sites, {overall_summary['dips']} dips"
-                )
-            return dip_results, methylation_results
-
-        with concurrent.futures.ProcessPoolExecutor(max_workers=self.threads) as executor:
-            futures = {}
-            for chrom, region_keys, chrom_records in chrom_inputs:
-                future = executor.submit(
-                    DipDetector._process_single_chromosome,
-                    self,
-                    chrom,
-                    region_keys,
-                    chrom_records,
-                )
-                futures[future] = chrom
-            for future in concurrent.futures.as_completed(futures):
-                dips, methylation, summary = future.result()
-                dip_results.update(dips)
-                methylation_results.update(methylation)
-                overall_summary["regions"] += summary["regions"]
-                overall_summary["sites"] += summary["sites"]
-                overall_summary["dips"] += summary["dips"]
-
-        if self.debug:
-            print(
-                f"[DEBUG] Overall: {overall_summary['regions']} regions, "
-                f"{overall_summary['sites']} CpG sites, {overall_summary['dips']} dips"
-            )
-
-        return dip_results, methylation_results
