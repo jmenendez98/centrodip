@@ -54,13 +54,13 @@ def main() -> None:
         "--sensitivity",
         type=zero_to_one_float,
         default=0.5,
-        help="Sensitivity of dip detection. Higher values require more pronounced dips. (default: 0.5)",
+        help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
         "--edge-sensitivity",
         type=zero_to_one_float,
-        default=0.25,
-        help="Sensitivity of edge detection. Higher values require more pronounced edges, causing larger dip calls. (default: 0.1)",
+        default=0.1,
+        help="Sensitivity of edge detection. Must be a float between 0 and 1. Higher values require more pronounced edges, causing wider dip calls. (default: 0.25)",
     )
     dip_detect_group.add_argument(
         "--enrichment",

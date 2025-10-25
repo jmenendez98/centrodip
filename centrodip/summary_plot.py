@@ -238,13 +238,13 @@ def _add_track_legends(
     coverage_cbar.ax.set_xlabel("Cov", fontsize=6, labelpad=-3)
 
 
-def create_summary_plot(
+def centrodip_summary_plot(
     regions_per_chrom: RegionDict,
     methylation_per_region: MethylationDict,
-    dip_results: DipDict,
+    final_dips: DipDict,
     output_path: Path | str,
     *,
-    unfiltered_dip_results: DipDict | None = None,
+    unfiltered_dips: DipDict | None = None,
     panel_height: float = 2.0,
     figure_width: float = 12.0,
 ) -> Path:
@@ -271,8 +271,7 @@ def create_summary_plot(
     )
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
-
-    plot_unfiltered = bool(unfiltered_dip_results)
+    plot_unfiltered = bool(unfiltered_dips)
 
     for axis_row, chrom in zip(axes, chromosomes):
         ax = axis_row[0]
@@ -314,7 +313,7 @@ def create_summary_plot(
 
             _plot_dips(
                 ax,
-                dip_results.get(region_key, {}),
+                final_dips.get(region_key, {}),
                 y_bottom=3.0,
                 height=0.5,
                 color="black",
@@ -324,10 +323,9 @@ def create_summary_plot(
 
             if plot_unfiltered:
                 unfiltered_record = (
-                    unfiltered_dip_results.get(region_key, {})
-                    if unfiltered_dip_results
-                    else {}
+                    unfiltered_dips.get(region_key, {}) if unfiltered_dips else {}
                 )
+
                 _plot_dips(
                     ax,
                     unfiltered_record,
@@ -401,4 +399,4 @@ def create_summary_plot(
     return output_path
 
 
-__all__ = ["create_summary_plot"]
+__all__ = ["centrodip_summary_plot"]
