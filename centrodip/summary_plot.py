@@ -17,10 +17,6 @@ DipRecord = Dict[str, List[int]]
 DipDict = Dict[str, DipRecord]
 
 
-def _region_key(chrom: str, start: int, end: int) -> str:
-    return f"{chrom}:{start}-{end}"
-
-
 def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
     left = float(min(start, end))
     right = float(max(start, end))
@@ -104,6 +100,75 @@ def _fraction_window_bins(
             means.append(np.nan)
 
     return edges, np.asarray(means, dtype=float)
+
+def _slice_methylation_record(
+    record: MethylationRecord,
+    region_start: int,
+    region_end: int,
+) -> MethylationRecord:
+    if not record:
+        return {}
+
+    positions = list(record.get("position", []))
+    if not positions:
+        return {key: [] for key in record.keys()}
+
+    region_min = float(min(region_start, region_end))
+    region_max = float(max(region_start, region_end))
+    mask = [region_min <= float(pos) <= region_max for pos in positions]
+    if not any(mask):
+        return {key: [] for key in record.keys()}
+
+    indices = [idx for idx, keep in enumerate(mask) if keep]
+    sliced: MethylationRecord = {}
+    for key, values in record.items():
+        if isinstance(values, list) and len(values) == len(positions):
+            sliced[key] = [values[idx] for idx in indices]
+        else:
+            sliced[key] = list(values) if isinstance(values, list) else []
+
+    # Ensure expected keys exist even if absent in the original record.
+    for key in (
+        "position",
+        "fraction_modified",
+        "valid_coverage",
+        "lowess_fraction_modified",
+    ):
+        sliced.setdefault(key, [])
+
+    return sliced
+
+
+def _filter_dips_for_region(
+    dips: DipRecord,
+    region_start: int,
+    region_end: int,
+) -> DipRecord:
+    if not dips:
+        return {"starts": [], "ends": []}
+
+    region_min = int(min(region_start, region_end))
+    region_max = int(max(region_start, region_end))
+
+    starts = dips.get("starts", [])
+    ends = dips.get("ends", [])
+
+    region_starts: List[int] = []
+    region_ends: List[int] = []
+
+    for dip_start, dip_end in zip(starts, ends):
+        dip_start = int(dip_start)
+        dip_end = int(dip_end)
+
+        if dip_end < region_min or dip_start > region_max:
+            continue
+
+        clipped_start = max(dip_start, region_min)
+        clipped_end = min(dip_end, region_max)
+        region_starts.append(clipped_start)
+        region_ends.append(clipped_end)
+
+    return {"starts": region_starts, "ends": region_ends}
 
 
 def _plot_band(
@@ -277,67 +342,69 @@ def centrodip_summary_plot(
 
         _plot_regions(ax, regions)
 
-
-        methylation = methylation_per_region.get(region_key, {})
-
-        # plot coverage bar
-        _plot_band(
-            ax,
-            methylation,
-            start,
-            end,
-            "valid_coverage",
-            1.0,
-            1.5,
-            coverage_norm,
+        chrom_methylation = methylation_per_region.get(chrom, {})
+        chrom_final_dips = final_dips.get(chrom, {})
+        chrom_unfiltered_dips = (
+            unfiltered_dips.get(chrom, {}) if plot_unfiltered and unfiltered_dips else {}
         )
 
-        # plot the raw fraction modified values as a line
-        _plot_fraction_line(
-            ax=ax,
-            record=methylation,
-            column="fraction_modified",
-            region_start=start,
-            region_end=end,
-            alpha=0.25,
-            color="black"
-        )
+        for start, end in regions:
+            methylation = _slice_methylation_record(chrom_methylation, start, end)
 
-        # plot the smoothed LOWESS fraction modified line
-        _plot_fraction_line(
-            ax=ax,
-            record=methylation,
-            column="lowess_fraction_modified",
-            region_start=start,
-            region_end=end,
-            alpha=0.75,
-            color="orange"
-        )
+           # plot coverage bar
+            _plot_band(
+                ax,
+                methylation,
+                start,
+                end,
+                "valid_coverage",
+                1.0,
+                1.5,
+                coverage_norm,
+            )
 
-        _plot_dips(
-            ax,
-            final_dips.get(region_key, {}),
-            y_bottom=3.0,
-            height=0.5,
-            color="black",
-            alpha=0.7,
-            zorder=2,
-        )
+            # plot the raw fraction modified values as a line
+            _plot_fraction_line(
+                ax=ax,
+                record=methylation,
+                column="fraction_modified",
+                region_start=start,
+                region_end=end,
+                alpha=0.25,
+                color="black",
+            )
 
-        if plot_unfiltered:
-            unfiltered_record = (
-                unfiltered_dips.get(region_key, {}) if unfiltered_dips else {}
+            # plot the smoothed LOWESS fraction modified line
+            _plot_fraction_line(
+                ax=ax,
+                record=methylation,
+                column="lowess_fraction_modified",
+                region_start=start,
+                region_end=end,
+                alpha=0.75,
+                color="orange",
             )
 
             _plot_dips(
                 ax,
-                unfiltered_record,
-                y_bottom=3.6,
-                height=0.35,
-                color="tab:blue",
-                alpha=0.4,
-                zorder=3,
+                _filter_dips_for_region(chrom_final_dips, start, end),
+                y_bottom=3.0,
+                height=0.5,
+                color="black",
+                alpha=0.7,
+                zorder=2,
             )
+
+            if plot_unfiltered:
+                _plot_dips(
+                    ax,
+                    _filter_dips_for_region(chrom_unfiltered_dips, start, end),
+                    y_bottom=3.6,
+                    height=0.35,
+                    color="tab:blue",
+                    alpha=0.4,
+                    zorder=3,
+                )
 
         ax.set_xlim(x_min, x_max)
         if plot_unfiltered:
