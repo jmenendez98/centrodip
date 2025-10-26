@@ -1,45 +1,32 @@
 import pytest
 
-from centrodip.parse import Parser
-from centrodip.dip_detect import DipDetector
+from centrodip.detect_dips import DipDetector
 
 from tests.conftest import EXPECTED_CHROMS
 
 class TestMatrix:
-    @pytest.fixture
-    def centro_dip(self):
-        """Fixture for matrix calculator"""
-        return DipDetector(
-            window_size=51,
-            sensitivity=0.667,
-            edge_sensitivity=0.5,
-            enrichment=False,
-            threads=1,
-        )
-
     def test_centrodip_remote_dataset(
         self,
-        bed_parser,
+        data_handler_factory,
         remote_dataset_paths,
-        centro_dip,
     ):
         """Test making matrices against a real dataset."""
         selected_dataset = None
 
         for dataset_key, dataset_paths in remote_dataset_paths.items():
-            methylation_dict, regions_dict = bed_parser.process_files(
+            handler = data_handler_factory(
                 methylation_path=dataset_paths["bedmethyl"],
-                regions_path=dataset_paths["regions"]
+                regions_path=dataset_paths["regions"],
+                threads=1,
             )
 
-            for region_name, region_values in methylation_dict.items():
-                if len(region_values["position"]) >= centro_dip.window_size:
+            for region_name, region_values in handler.methylation_dict.items():
+                if len(region_values["position"]) >= 51:
                     selected_dataset = (
                         dataset_key,
                         region_name,
                         region_values,
-                        methylation_dict,
-                        regions_dict,
+                        handler,
                     )
                     break
 
@@ -49,20 +36,25 @@ class TestMatrix:
         if not selected_dataset:
             pytest.skip("No downloaded region contains enough CpGs for smoothing.")
 
-        dataset_key, region_name, region_values, methylation_dict, regions_dict = selected_dataset
+        dataset_key, region_name, region_values, handler = selected_dataset
         expected_chrom = EXPECTED_CHROMS[dataset_key]
-        assert region_name.startswith(f"{expected_chrom}:")
+        assert region_name.split(":", 1)[0] == expected_chrom
 
-        methylation_subset = {region_name: region_values}
-        cdrs_per_region, methylation_per_region = centro_dip.dip_detect_all_chromosome(
-            methylation_per_region=methylation_subset,
-            regions_per_chrom=regions_dict,
+        detector = DipDetector(
+            methylation_data=handler.methylation_dict,
+            regions_data=handler.region_dict,
+            prominence=0.667,
+            height=10,
+            broadness=10,
+            enrichment=False,
+            threads=1,
         )
+        dip_results = detector.detect_all()
 
-        # assert region_name in cdrs_per_region
-        assert region_name in methylation_per_region
-        assert "savgol_frac_mod" in methylation_per_region[region_name]
-        assert "savgol_frac_mod_dy" in methylation_per_region[region_name]
-        assert len(methylation_per_region[region_name]["savgol_frac_mod"]) == len(
-            methylation_subset[region_name]["fraction_modified"]
+        assert region_name in dip_results
+        methylation_per_region = handler.methylation_dict
+        assert "lowess_fraction_modified" in methylation_per_region[region_name]
+        assert "lowess_fraction_modified_dy" in methylation_per_region[region_name]
+        assert len(methylation_per_region[region_name]["lowess_fraction_modified"]) == len(
+            region_values["fraction_modified"]
         )

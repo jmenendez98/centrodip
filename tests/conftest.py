@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Callable, Dict
 from urllib.error import ContentTooShortError, HTTPError, URLError
 import urllib.request
 
@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from centrodip.parse import Parser
+from centrodip.load_data import DataHandler
 
 REMOTE_DATASETS: Dict[str, Dict[str, str]] = {
     "chm13_chr1": {
@@ -54,19 +54,35 @@ def _download_file(url: str, destination: Path) -> Path:
 
     return destination
 
-
 @pytest.fixture(scope="session")
-def bed_parser() -> Parser:
-    return Parser(
+def bed_parser(test_data_dir: Path) -> DataHandler:
+    return DataHandler(
+        regions_path=test_data_dir / "censat_test.bed",
+        methylation_path=test_data_dir / "bedmethyl_test.bed",
         mod_code="m",
         bedgraph=False,
+        smooth_window_bp=10000,
+        threads=1,
     )
 
+@pytest.fixture()
+def data_handler_factory() -> Callable[..., DataHandler]:
+    def factory(*, methylation_path: Path | str, regions_path: Path | str, **overrides) -> DataHandler:
+        return DataHandler(
+            regions_path=regions_path,
+            methylation_path=methylation_path,
+            mod_code="m",
+            bedgraph=False,
+            smooth_window_bp=overrides.get("smooth_window_bp", 10000),
+            threads=overrides.get("threads", 1),
+            debug=overrides.get("debug", False),
+        )
+
+    return factory
 
 @pytest.fixture(scope="session")
 def test_data_dir() -> Path:
     return Path(__file__).parent / "data"
-
 
 @pytest.fixture(scope="session")
 def remote_dataset_paths(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Dict[str, Path]]:
