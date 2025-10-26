@@ -23,6 +23,7 @@ def detectDips(
     regions_data: Dict[str, RegionRecord],
     prominence: float = 0.25,
     height: float = 10,
+    broadness: float = 10,
     enrichment: bool = False,
     threads: int = 1,
     debug: bool = False,
@@ -34,6 +35,7 @@ def detectDips(
         regions_data=regions_data,
         prominence=prominence,
         height=height,
+        broadness=broadness,
         enrichment=enrichment,
         threads=threads,
         debug=debug,
@@ -50,6 +52,7 @@ class DipDetector:
         regions_data: Dict[str, RegionRecord],
         prominence: float = 0.25,
         height: float = 10,
+        broadness: float = 10,
         enrichment: bool = False,
         threads: int = 1,
         debug: bool = False,
@@ -59,6 +62,7 @@ class DipDetector:
 
         self.prominence = float(prominence)
         self.height = float(height)
+        self.broadness = float(broadness)
         self.enrichment = bool(enrichment)
 
         self.threads = max(int(threads), 1)
@@ -232,13 +236,13 @@ class DipDetector:
         neg_dy=smoothed_methylation_dy[smoothed_methylation_dy<0]
         l_edges, _ = signal.find_peaks(
             -smoothed_methylation_dy, 
-            height=-np.percentile(neg_dy, 10)
+            height=-np.percentile(neg_dy, 100-self.broadness)
         )
 
         pos_dy=smoothed_methylation_dy[smoothed_methylation_dy>0]
         r_edges, _ = signal.find_peaks(
             smoothed_methylation_dy, 
-            height=np.percentile(pos_dy, 90)
+            height=np.percentile(pos_dy, self.broadness)
         )
 
         edges = np.concatenate([l_edges, r_edges])

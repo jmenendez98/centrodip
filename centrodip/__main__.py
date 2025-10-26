@@ -63,6 +63,12 @@ def main() -> None:
         help="Height for dip detection. Must be a float between 0 and 100. Lower values filter more dips. (default: 10)",
     )
     dip_detect_group.add_argument(
+        "--broadness",
+        type=float,
+        default=75,
+        help="Broadness of dips called. Higher values make broader entries. (default: 75)",
+    )
+    dip_detect_group.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
@@ -173,6 +179,7 @@ def main() -> None:
         regions_data=input_data.region_dict,
         prominence=args.prominence,
         height=args.height,
+        broadness=args.broadness,
         enrichment=args.enrichment,
         threads=args.threads,
         debug=args.debug,
