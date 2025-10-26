@@ -49,7 +49,7 @@ def main() -> None:
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
 
-    dip_detect_group = argparser.add_argument_group('Dip Detection Options')
+    dip_detect_group = argparser.add_argument_group('Detection Options')
     dip_detect_group.add_argument(
         "--prominence",
         type=zero_to_one_float,
@@ -69,23 +69,23 @@ def main() -> None:
         help="Find regions enriched (rather than depleted) for methylation.",
     )
 
-    dip_filter_group = argparser.add_argument_group('Dip Filtering Options')
+    dip_filter_group = argparser.add_argument_group('Filtering Options')
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
-        default=1000,
+        default=5000,
         help="Minimum dip size in base pairs. (default: 5000)",
     )
     dip_filter_group.add_argument(
         "--min-z-score",
         type=int,
-        default=1.5,
+        default=2,
         help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
     )
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
-        default=250000,
+        default=500000,
         help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 250000)",
     )
 
