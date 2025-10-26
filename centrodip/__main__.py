@@ -53,7 +53,7 @@ def main() -> None:
     dip_detect_group.add_argument(
         "--prominence",
         type=zero_to_one_float,
-        default=0.25,
+        default=0.10,
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
@@ -73,20 +73,20 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
-        default=5000,
+        default=1000,
         help="Minimum dip size in base pairs. (default: 5000)",
     )
     dip_filter_group.add_argument(
         "--min-z-score",
         type=int,
-        default=1,
+        default=1.5,
         help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
     )
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
         default=250000,
-        help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: -1)",
+        help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 250000)",
     )
 
     other_arguments_group = argparser.add_argument_group('Other Options', 'Miscellaneous arguments affecting outputs and runtime.')
