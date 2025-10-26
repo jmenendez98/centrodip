@@ -7,8 +7,8 @@ import numpy as np
 from scipy import signal
 
 
-MethylationRecord = Dict[str, List[float | int]]
-RegionRecord = Dict[str, List[float | int]]
+MethylationRecord = Dict[str, List[float]]
+RegionRecord = Dict[str, List[int]]
 DipResults = Dict[str, Dict[str, List[int]]]
 
 
