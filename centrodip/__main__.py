@@ -77,6 +77,12 @@ def main() -> None:
         help="Minimum dip size in base pairs. (default: 5000)",
     )
     dip_filter_group.add_argument(
+        "--min-z-score",
+        type=int,
+        default=1,
+        help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
+    )
+    dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
         default=250000,

@@ -158,6 +158,8 @@ class DipDetector:
             dip_record = _empty_dip_record()
             dip_record["dip_centers"] = []
             dip_record["dip_edges"] = []
+            dip_record["positions"] = []
+            dip_record["lowess_fraction_modified"] = []
             return dip_record
 
         centers = self.find_dip_centers(smoothed)
@@ -174,6 +176,9 @@ class DipDetector:
             centers=centers,
             edges=edges,
         )
+
+        dip_record["positions"] = [int(pos) for pos in cpg_sites.tolist()]
+        dip_record["lowess_fraction_modified"] = [float(val) for val in smoothed.tolist()]
 
         dip_record["dip_centers"] = [
             int(cpg_sites[idx])
