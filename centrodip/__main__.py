@@ -95,7 +95,7 @@ def main() -> None:
         help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 250000)",
     )
 
-    other_arguments_group = argparser.add_argument_group('Other Options', 'Miscellaneous arguments affecting outputs and runtime.')
+    other_arguments_group = argparser.add_argument_group('Other Options')
     other_arguments_group.add_argument(
         "--threads",
         type=int,
@@ -189,10 +189,9 @@ def main() -> None:
     if args.debug:
         with open(f"{output_prefix}.debug.dip_centers.bed", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in raw_dips.items():
+            for chrom, values in raw_dips.items():
                 if not values:
                     continue
-                chrom = region.split(":", 1)[0]
                 for pos in values.get("dip_centers", []) or []:
                     start = int(pos)
                     lines.append(f"{chrom}\t{start}\t{start + 1}\n")
@@ -201,10 +200,9 @@ def main() -> None:
 
         with open(f"{output_prefix}.debug.dip_edges.bed", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in raw_dips.items():
+            for chrom, values in raw_dips.items():
                 if not values:
                     continue
-                chrom = region.split(":", 1)[0]
                 for pos in values.get("dip_edges", []) or []:
                     start = int(pos)
                     lines.append(f"{chrom}\t{start}\t{start + 1}\n")

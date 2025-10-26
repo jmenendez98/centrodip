@@ -277,68 +277,67 @@ def centrodip_summary_plot(
 
         _plot_regions(ax, regions)
 
-        for start, end in regions:
-            region_key = _region_key(chrom, start, end)
-            record = methylation_per_region.get(region_key, {})
 
-            # plot coverage bar
-            _plot_band(
-                ax,
-                record,
-                start,
-                end,
-                "valid_coverage",
-                1.0,
-                1.5,
-                coverage_norm,
-            )
+        methylation = methylation_per_region.get(region_key, {})
 
-            # plot the raw fraction modified values as a line
-            _plot_fraction_line(
-                ax=ax,
-                record=record,
-                column="fraction_modified",
-                region_start=start,
-                region_end=end,
-                alpha=0.25,
-                color="black"
-            )
+        # plot coverage bar
+        _plot_band(
+            ax,
+            methylation,
+            start,
+            end,
+            "valid_coverage",
+            1.0,
+            1.5,
+            coverage_norm,
+        )
 
-            # plot the smoothed LOWESS fraction modified line
-            _plot_fraction_line(
-                ax=ax,
-                record=record,
-                column="lowess_fraction_modified",
-                region_start=start,
-                region_end=end,
-                alpha=0.75,
-                color="orange"
+        # plot the raw fraction modified values as a line
+        _plot_fraction_line(
+            ax=ax,
+            record=methylation,
+            column="fraction_modified",
+            region_start=start,
+            region_end=end,
+            alpha=0.25,
+            color="black"
+        )
+
+        # plot the smoothed LOWESS fraction modified line
+        _plot_fraction_line(
+            ax=ax,
+            record=methylation,
+            column="lowess_fraction_modified",
+            region_start=start,
+            region_end=end,
+            alpha=0.75,
+            color="orange"
+        )
+
+        _plot_dips(
+            ax,
+            final_dips.get(region_key, {}),
+            y_bottom=3.0,
+            height=0.5,
+            color="black",
+            alpha=0.7,
+            zorder=2,
+        )
+
+        if plot_unfiltered:
+            unfiltered_record = (
+                unfiltered_dips.get(region_key, {}) if unfiltered_dips else {}
             )
 
             _plot_dips(
                 ax,
-                final_dips.get(region_key, {}),
-                y_bottom=3.0,
-                height=0.5,
-                color="black",
-                alpha=0.7,
-                zorder=2,
+                unfiltered_record,
+                y_bottom=3.6,
+                height=0.35,
+                color="tab:blue",
+                alpha=0.4,
+                zorder=3,
             )
-
-            if plot_unfiltered:
-                unfiltered_record = (
-                    unfiltered_dips.get(region_key, {}) if unfiltered_dips else {}
-                )
-
-                _plot_dips(
-                    ax,
-                    unfiltered_record,
-                    y_bottom=3.6,
-                    height=0.35,
-                    color="tab:blue",
-                    alpha=0.4,
-                    zorder=3,
-                )
 
         ax.set_xlim(x_min, x_max)
         if plot_unfiltered:

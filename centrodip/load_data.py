@@ -3,7 +3,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import concurrent.futures
 import warnings
 import numpy as np
@@ -217,8 +217,7 @@ class DataHandler:
                 if not (region_start < methylation_position < region_end):
                     continue
 
-                region_key = f"{chrom}:{region_start}-{region_end}"
-                entry = methylation_dict[region_key]
+                entry = methylation_dict[chrom]
                 entry["position"].append(methylation_position)
                 entry["fraction_modified"].append(
                     float(columns[3]) if self.bedgraph else float(columns[10])
