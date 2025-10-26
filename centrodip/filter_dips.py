@@ -163,15 +163,14 @@ def filterDips(
     dip_dict: DipResults,
     cluster_distance: int,
     min_size: int,
-    *,
-    min_value_zscore: float = 1.0,
+    min_zscore: float = 1.0,
 ) -> DipResults:
     filtered: DipResults = {}
     for region, record in (dip_dict or {}).items():
         current = record
-        current = filter_by_size(record, min_size)
-        current = filter_by_value(current, min_value_zscore)
-        current = filter_by_cluster(current, cluster_distance)
+        current = filter_by_size(record, min_size) # size filter
+        current = filter_by_value(current, min_zscore) # zscore filter
+        current = filter_by_cluster(current, cluster_distance) # cluster filter
         filtered[region] = current
     return filtered
 

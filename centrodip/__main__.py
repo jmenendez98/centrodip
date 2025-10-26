@@ -85,13 +85,13 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-z-score",
         type=int,
-        default=2,
+        default=1.5,
         help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
     )
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
-        default=500000,
+        default=250000,
         help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 250000)",
     )
 
@@ -228,8 +228,9 @@ def main() -> None:
     # -- filter dips --
     final_dips = filterDips(
         dip_dict=raw_dips,
-        cluster_distance=args.cluster_distance,
         min_size=args.min_size,
+        min_zscore=args.min_z_score,
+        cluster_distance=args.cluster_distance,
     )
 
     # write final dips to output BED file
