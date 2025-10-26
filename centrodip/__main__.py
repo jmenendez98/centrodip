@@ -45,22 +45,22 @@ def main() -> None:
     parsing_group.add_argument(
         "--window-size",
         type=int,
-        default=25000,
+        default=10000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
 
     dip_detect_group = argparser.add_argument_group('Dip Detection Options')
     dip_detect_group.add_argument(
-        "--sensitivity",
+        "--prominence",
         type=zero_to_one_float,
-        default=0.334,
+        default=0.25,
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
-        "--dip-width",
-        type=zero_to_one_float,
-        default=1,
-        help="Width used for dip detection. Higher values require wider dips. (default: 11)",
+        "--height",
+        type=float,
+        default=10,
+        help="Height for dip detection. Must be a float between 0 and 100. Lower values filter more dips. (default: 10)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -73,7 +73,7 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
-        default=1000,
+        default=5000,
         help="Minimum dip size in base pairs. (default: 5000)",
     )
     dip_filter_group.add_argument(
@@ -147,8 +147,8 @@ def main() -> None:
             handle.writelines(lines)
 
         with open(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", "w", encoding="utf-8") as handle:
+            lines = []
             for region, values in input_data.methylation_dict.items():
-                lines = []
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
@@ -165,8 +165,8 @@ def main() -> None:
     raw_dips = detectDips(
         methylation_data=input_data.methylation_dict,
         regions_data=input_data.region_dict,
-        sensitivity=args.sensitivity,
-        dip_width=args.dip_width,
+        prominence=args.prominence,
+        height=args.height,
         enrichment=args.enrichment,
         threads=args.threads,
         debug=args.debug,

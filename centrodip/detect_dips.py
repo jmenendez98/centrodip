@@ -11,6 +11,7 @@ MethylationRecord = Dict[str, List[float | int]]
 RegionRecord = Dict[str, List[float | int]]
 DipResults = Dict[str, Dict[str, List[int]]]
 
+
 def _empty_dip_record() -> Dict[str, List[int]]:
     return {
         "starts": [],
@@ -20,8 +21,8 @@ def _empty_dip_record() -> Dict[str, List[int]]:
 def detectDips(
     methylation_data: Dict[str, MethylationRecord],
     regions_data: Dict[str, RegionRecord],
-    sensitivity: float = 0.667,
-    dip_width: float = 11,
+    prominence: float = 0.25,
+    height: float = 10,
     enrichment: bool = False,
     threads: int = 1,
     debug: bool = False,
@@ -31,13 +32,14 @@ def detectDips(
     detector = DipDetector(
         methylation_data=methylation_data,
         regions_data=regions_data,
-        sensitivity=sensitivity,
-        dip_width=dip_width,
+        prominence=prominence,
+        height=height,
         enrichment=enrichment,
         threads=threads,
         debug=debug,
     )
     return detector.detect_all()
+
 
 class DipDetector:
     """Detect dips in methylation profiles."""
@@ -46,8 +48,8 @@ class DipDetector:
         self,
         methylation_data: Dict[str, MethylationRecord],
         regions_data: Dict[str, RegionRecord],
-        sensitivity: float = 0.667,
-        dip_width: float = 11,
+        prominence: float = 0.25,
+        height: float = 10,
         enrichment: bool = False,
         threads: int = 1,
         debug: bool = False,
@@ -55,8 +57,8 @@ class DipDetector:
         self.methylation_data = methylation_data
         self.regions_data = regions_data
 
-        self.sensitivity = float(sensitivity)
-        self.dip_width = float(dip_width)
+        self.prominence = float(prominence)
+        self.height = float(height)
         self.enrichment = bool(enrichment)
 
         self.threads = max(int(threads), 1)
@@ -191,18 +193,24 @@ class DipDetector:
         # get info on data range for prominence calculation
         if smoothed_methylation.size == 0:
             return np.array([], dtype=int)
-        data_range = float(np.max(smoothed_methylation) - np.min(smoothed_methylation))
-        data_prominence_threshold = max(self.sensitivity * data_range, 0.0)
 
-        # call the dip centers
-        peak_kwargs = {}
-        if data_prominence_threshold > 0:
-            peak_kwargs["prominence"] = data_prominence_threshold
-            peak_kwargs["width"] = self.dip_width
+        data_range = float(np.max(smoothed_methylation) - np.min(smoothed_methylation))
+        data_prominence_threshold = self.prominence * data_range
+
         if self.enrichment:
-            centers, _ = signal.find_peaks(smoothed_methylation, **peak_kwargs)
+            centers, _ = signal.find_peaks(
+                smoothed_methylation, 
+                prominence=data_prominence_threshold,
+                height=np.percentile(smoothed_methylation, 100-self.height),
+                wlen=len(smoothed_methylation)
+            )
         else:
-            centers, _ = signal.find_peaks(-smoothed_methylation, **peak_kwargs)
+            centers, _ = signal.find_peaks(
+                -smoothed_methylation, 
+                prominence=data_prominence_threshold,
+                height=-np.percentile(smoothed_methylation, self.height),
+                wlen=len(smoothed_methylation)
+            )
 
         return centers.astype(int)
 
@@ -212,24 +220,24 @@ class DipDetector:
         centers: np.ndarray,
     ) -> np.ndarray:
         """Return dip edge indices in the smoothed methylation dy."""
-        smoothed_methylation_dy = np.abs(smoothed_methylation_dy)
 
         if smoothed_methylation_dy.size == 0:
             return np.array([], dtype=int)
 
-        data_range = float(np.max(smoothed_methylation_dy) - np.min(smoothed_methylation_dy))
-        data_prominence_threshold = max(0.1 * data_range, 0.0)
+        neg_dy=smoothed_methylation_dy[smoothed_methylation_dy<0]
+        l_edges, _ = signal.find_peaks(
+            -smoothed_methylation_dy, 
+            height=-np.percentile(neg_dy, 10)
+        )
 
-        # call potential dip edges
-        peak_kwargs = {}
-        if data_prominence_threshold > 0:
-            peak_kwargs["prominence"] = data_prominence_threshold
+        pos_dy=smoothed_methylation_dy[smoothed_methylation_dy>0]
+        r_edges, _ = signal.find_peaks(
+            smoothed_methylation_dy, 
+            height=np.percentile(pos_dy, 90)
+        )
 
-        peak_kwargs["width"] = self.dip_width
-
-        edges, _ = signal.find_peaks(smoothed_methylation_dy, **peak_kwargs)
-
-        return edges.astype(int)
+        edges = np.concatenate([l_edges, r_edges])
+        return np.sort( edges.astype(int) )
 
     @staticmethod
     def correct_edges(

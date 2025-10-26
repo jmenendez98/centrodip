@@ -39,10 +39,12 @@ def filterDips(
     min_size: int,
 ) -> DipResults:
 
+    # add coverage filter here if needed in future
+
     # filter dips based on size
     size_filt_dips = _size_filter(record=dip_dict, min_size=min_size)
 
-    # add coverage filter here if needed in future
+    # 
     
     # would add clustering filter here if needed in future
     # cluster_filt_dips = _cluster_filter(record=dip_size_filt_dipsdict, cluster_distance=cluster_distance)

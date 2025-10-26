@@ -75,6 +75,7 @@ def lowess_smooth(y, x, window_bp):
     if n >= 2:
         dydx[0]  = dydx[1]
         dydx[-1] = dydx[-2]
+        
     return ys, dydx
 
 
@@ -92,7 +93,6 @@ def _smooth_region_task(args: Tuple[List[int], List[float], int]) -> List[float]
     y = np.asarray(fractions, dtype=float)
 
     y_sm, dy_sm = lowess_smooth(y, x, window_bp)
-    # dy_sm = np.gradient(y_sm, x, edge_order=2)
 
     return y_sm.tolist(), dy_sm.tolist()
 
@@ -258,5 +258,6 @@ class DataHandler:
             for fut in concurrent.futures.as_completed(fut_to_key):
                 key = fut_to_key[fut]
                 y_sm, dy_sm = fut.result()
+
                 self.methylation_dict[key]["lowess_fraction_modified"] = y_sm
                 self.methylation_dict[key]["lowess_fraction_modified_dy"] = dy_sm
