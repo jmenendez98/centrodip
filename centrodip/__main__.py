@@ -1,26 +1,47 @@
-from __future__ import annotations
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import argparse
-import os
 from typing import Dict, Iterable, List
 
 from .load_data import DataHandler
+from .lowess_smooth import lowessSmooth
 from .detect_dips import detectDips
 from .filter_dips import filterDips
 from .summary_plot import centrodip_summary_plot
 
 
-def main() -> None:
-    def zero_to_one_float(x):
-        """Type function for argparse to ensure 0 < x < 1."""
-        try:
-            x = float(x)
-        except ValueError:
-            raise argparse.ArgumentTypeError(f"{x!r} is not a valid float")
-        if x <= 0.0 or x >= 1.0:
-            raise argparse.ArgumentTypeError(f"{x} not in range (0, 1)")
-        return x
+def single_chromosome_task(
+    chrom, data,
+    window_size, 
+    prominence, height, broadness, enrichment,
 
+):
+    # first smooth the data with lowess_smooth
+    # --- LOWESS tranform data ---
+    data["lowess_fraction_modified"], data["lowess_fraction_modified_dy"] = lowess_smooth(
+        y=data["fraction_modified"],
+        x=data["position"],
+        cov=data["valid_coverage"],
+        window_bp=window_size
+    ) 
+
+    # then with smoothed data call dips...
+    # --- detect dips ---
+    raw_dips = detectDips(
+        methylation_data=input_data.methylation_dict,
+        regions_data=input_data.region_dict,
+        prominence=args.prominence,
+        height=args.height,
+        broadness=args.broadness,
+        enrichment=args.enrichment,
+        threads=args.threads,
+        debug=args.debug,
+    )
+
+
+
+def main() -> None:
     argparser = argparse.ArgumentParser(
         description="Process bedMethyl and region BED files to produce CDR predictions.",
     )
@@ -37,12 +58,6 @@ def main() -> None:
         help='Modification code to filter bedMethyl file. Selects rows with this as fourth column value. (default: "m")',
     )
     parsing_group.add_argument(
-        "--window-size",
-        type=int,
-        default=10000,
-        help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
-    )
-    parsing_group.add_argument(
         "--cov-conf",
         type=int,
         default=10,
@@ -50,9 +65,15 @@ def main() -> None:
     )
 
     dip_detect_group = argparser.add_argument_group('Detection Options')
+    parsing_group.add_argument(
+        "--window-size",
+        type=int,
+        default=10000,
+        help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
+    )
     dip_detect_group.add_argument(
         "--prominence",
-        type=zero_to_one_float,
+        type=float,
         default=0.10,
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
@@ -65,7 +86,7 @@ def main() -> None:
     dip_detect_group.add_argument(
         "--broadness",
         type=float,
-        default=75,
+        default=50,
         help="Broadness of dips called. Higher values make broader entries. (default: 75)",
     )
     dip_detect_group.add_argument(
@@ -131,14 +152,36 @@ def main() -> None:
     output_prefix = os.path.splitext(args.output)[0]
 
     # -- load data --
-    input_data = DataHandler(
+    data_handler = DataHandler(
         methylation_path=args.bedmethyl,
         regions_path=args.regions,
         mod_code=args.mod_code,
-        smooth_window_bp=args.window_size,
-        threads=args.threads,
         debug=args.debug,
     )
+
+    # add a futures parallelized functionized thing that can take th yielded input from running
+    # data_handler.load_data()...
+    with ProcessPoolExecutor(max_workers=args.threads) as ex:
+        futures = []
+
+        # stream the methylation BED; each yield is a single-chrom dict: {"chrX": methylation_data}
+        for one_chrom_dict in data_handler.load_data():
+            (chrom, methylation_data), = one_chrom_dict.items()   # unpack single item
+
+            fut = ex.submit(
+                single_chromosome_task, 
+                chrom, methylation_data, 
+                args.window_size
+            )
+            futures.append(fut)
+
+        # collect as tasks finish (no need to maintain input order)
+        for fut in as_completed(futures):
+            chrom, result = fut.result()  # handle exceptions here if desired
+            results_by_chrom[chrom] = result
+            if args.debug:
+                print(f"[DEBUG] Completed {chrom}: {result}")
+
 
     # if debug is on, write out the smoothed values
     if args.debug:
@@ -171,18 +214,6 @@ def main() -> None:
                     lines.append(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
             lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
             handle.writelines(lines)
-
-    # -- detect dips --
-    raw_dips = detectDips(
-        methylation_data=input_data.methylation_dict,
-        regions_data=input_data.region_dict,
-        prominence=args.prominence,
-        height=args.height,
-        broadness=args.broadness,
-        enrichment=args.enrichment,
-        threads=args.threads,
-        debug=args.debug,
-    )
 
     # if debug is on, write out the dip centers and edges
     if args.debug:

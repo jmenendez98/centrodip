@@ -166,14 +166,19 @@ class DipDetector:
             dip_record["lowess_fraction_modified"] = []
             return dip_record
 
+        # find the dip centers
         centers = self.find_dip_centers(smoothed)
-        edges = self.find_potential_edges(derivative, centers)
-        edges = self.correct_edges(
-            dy=derivative, 
-            centers=centers, 
-            edges=edges,
-            eps=1e-6,
-        )
+        #print(centers)
+
+        # determine the dip edge bounds
+        threshold = np.percentile(smoothed, self.broadness)
+        edge_bounds = self.find_edge_bounds(smoothed, threshold, centers)
+        #print(threshold)
+        #print(edge_bounds)
+
+        # pinpoint the actual edge using dy
+        # print(edge_bounds)
+        edges = self.find_edges(derivative, centers, edge_bounds)
 
         dip_record = self.extend_dips(
             cpg_sites=cpg_sites,
@@ -223,170 +228,69 @@ class DipDetector:
 
         return centers.astype(int)
 
-    def find_potential_edges(
+    def find_edge_bounds(
         self,
-        smoothed_methylation_dy: np.ndarray,
+        data: np.ndarray,
+        bounding_threshold: float,
         centers: np.ndarray,
     ) -> np.ndarray:
-        """Return dip edge indices in the smoothed methylation dy."""
-
-        if smoothed_methylation_dy.size == 0:
+        n = data.size
+        if n == 0:
             return np.array([], dtype=int)
 
-        neg_dy=smoothed_methylation_dy[smoothed_methylation_dy<0]
-        l_edges, _ = signal.find_peaks(
-            -smoothed_methylation_dy, 
-            height=-np.percentile(neg_dy, 100-self.broadness)
-        )
+        edge_bounds = []
+        for c in centers:
+            if c < 0:
+                continue
 
-        pos_dy=smoothed_methylation_dy[smoothed_methylation_dy>0]
-        r_edges, _ = signal.find_peaks(
-            smoothed_methylation_dy, 
-            height=np.percentile(pos_dy, self.broadness)
-        )
+            # ----- search left -----
+            li = c - 1
+            left_found = None
+            while li >= 0:
+                val = data[li]
+                if np.isfinite(val) and val >= bounding_threshold:
+                    left_found = li
+                    break
+                li -= 1
 
-        edges = np.concatenate([l_edges, r_edges])
-        return np.sort( edges.astype(int) )
+            # ----- search right -----
+            ri = c + 1
+            right_found = None
+            while ri < n:
+                val = data[ri]
+                if np.isfinite(val) and val >= bounding_threshold:
+                    right_found = ri
+                    break
+                ri += 1
 
-    @staticmethod
-    def correct_edges(
+            if (left_found is not None) and (right_found is not None):
+                edge_bounds.append((int(left_found), int(right_found)))
+            else:
+                edge_bounds.append((None, None))
+
+        return np.array(edge_bounds)
+
+    def find_edges(
+        self,
         dy: np.ndarray,
         centers: Iterable[int],
-        edges: Iterable[int],
-        eps: float = 1e-6,          # hysteresis: treat |dy| <= eps as zero
+        edge_bounds: Tuple(int, int),
     ) -> np.ndarray:
-        dy = np.asarray(dy, dtype=float)
-        centers = np.asarray(list(centers), dtype=int)
-        edges = np.asarray(list(edges), dtype=int)
+        if len(centers) != len(edge_bounds):
+            print( "differing number of centers and edges!" )
+            return
 
-        n = dy.size
-        if n == 0 or centers.size == 0:
-            return np.empty(0, dtype=int)
+        edges = []
+        for i, (c, (l, r)) in enumerate(zip(centers, edge_bounds)):
+            if l <= c <= r:
+                continue # if center is not in between edges
+            elif l or r is None:
+                continue # if edge is not reached through bounds
 
-        edges = edges[(0 <= edges) & (edges < n)]
-        edges.sort()
-
-        corrected: List[int] = []
-
-        for center in centers:
-            if not (0 <= center < n):
-                continue
-            left_idx = np.searchsorted(edges, center, side="left")
-            right_idx = np.searchsorted(edges, center, side="right")
-
-            has_left_edge = left_idx > 0
-            has_right_edge = right_idx < edges.size
-
-            left = edges[left_idx - 1] if has_left_edge else max(center - 1, 0)
-            right = edges[right_idx] if has_right_edge else min(center + 1, n - 1)
-
-            if has_left_edge and left < center:
-                lo = hi = int(left)
-                while lo - 1 >= 0 and dy[lo - 1] <= eps:
-                    lo -= 1
-                while hi + 1 < center and dy[hi + 1] <= eps:
-                    hi += 1
-                hi = min(hi, center - 1)
-                if hi >= lo:
-                    left = lo + int(np.argmin(dy[lo : hi + 1]))
-                else:
-                    left = int(left)
-            else:
-                left = max(center - 1, 0)
-
-            if has_right_edge and right > center:
-                lo = hi = int(right)
-                while hi + 1 < n and dy[hi + 1] >= -eps:
-                    hi += 1
-                while lo - 1 > center and dy[lo - 1] >= -eps:
-                    lo -= 1
-                lo = max(lo, center + 1)
-                if hi >= lo:
-                    right = lo + int(np.argmax(dy[lo : hi + 1]))
-                else:
-                    right = int(right)
-            else:
-                right = min(center + 1, n - 1)
-            corrected.extend((int(left), int(right)))
-
-        return np.asarray(corrected, dtype=int)
-
-        def _expand_patch_left(start_i: int, stop_before: int) -> Tuple[int, int]:
-            """Expand around start_i while dy <= +eps, capped at stop_before (exclusive)."""
-            # left bound
-            L = start_i
-            while L - 1 >= 0 and dy[L - 1] <= eps:
-                if (L - 1) >= 0:
-                    L -= 1
-                else:
-                    break
-            # right bound
-            R = start_i
-            while R + 1 < n and dy[R + 1] <= eps and (R + 1) < stop_before:
-                R += 1
-            # cap to not cross center: caller sets stop_before = center
-            R = min(R, stop_before - 1)
-            return L, R
-
-        def _expand_patch_right(start_i: int, start_after: int) -> Tuple[int, int]:
-            """Expand around start_i while dy >= -eps, capped at start_after (inclusive lower bound)."""
-            # left bound
-            L = start_i
-            while L - 1 >= 0 and dy[L - 1] >= -eps and (L - 1) > start_after:
-                L -= 1
-            # right bound
-            R = start_i
-            while R + 1 < n and dy[R + 1] >= -eps:
-                R += 1
-            # cap to not cross center: caller sets start_after = center
-            L = max(L, start_after + 1)
-            return L, R
-
-        for c in centers:
-            if c < 0 or c >= n:
-                continue
-
-            # ----- find nearest left/right candidate edges relative to c -----
-            # left: max edge < c
-            left_mask = edges_sorted < c
-            if np.any(left_mask):
-                left_i0 = edges_sorted[left_mask][-1]
-            else:
-                left_i0 = max(c - 1, 0)
-
-            # right: min edge > c
-            right_mask = edges_sorted > c
-            if np.any(right_mask):
-                right_i0 = edges_sorted[right_mask][0]
-            else:
-                right_i0 = min(c + 1, n - 1)
-
-            # ----- refine within slope patches -----
-            # LEFT patch: dy <= +eps, capped to < c
-            if left_i0 < c:
-                L, R = _expand_patch_left(left_i0, stop_before=c)
-                if L <= R:
-                    # argmin within [L, R]
-                    left_i = L + int(np.argmin(dy[L:R + 1]))
-                else:
-                    left_i = left_i0
-            else:
-                left_i = max(c - 1, 0)
-
-            # RIGHT patch: dy >= -eps, capped to > c
-            if right_i0 > c:
-                Lr, Rr = _expand_patch_right(right_i0, start_after=c)
-                if Lr <= Rr:
-                    # argmax within [Lr, Rr]
-                    right_i = Lr + int(np.argmax(dy[Lr:Rr + 1]))
-                else:
-                    right_i = right_i0
-            else:
-                right_i = min(c + 1, n - 1)
-
-            corrected.append((int(left_i), int(right_i)))
-
-        return np.asarray(corrected, dtype=int)
+            
+            print(i, (c, e))
+        
+        return
 
     def extend_dips(
         self,
