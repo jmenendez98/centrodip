@@ -14,13 +14,26 @@ RegionDict = Dict[str, Dict[str, List[int]]]
 MethylationDict = Dict[str, Dict[str, List[float]]]
 
 
-# ---------- LOWESS (bp-window) at module scope so it's picklable ----------
-def lowess_smooth(y, x, window_bp):
+def lowess_smooth(y, x, window_bp, point_weights: np.ndarray | None = None):
+    """
+    LOWESS with tricube distance kernel.
+    If point_weights is provided (length n), they are multiplied into the local
+    tricube weights inside each window. Use values in [0, 1].
+    """
     y = np.asarray(y, float)
     x = np.asarray(x, float)
     n = len(y)
     if n == 0:
         return np.array([], float), np.array([], float)
+
+    if point_weights is not None:
+        pw = np.asarray(point_weights, float)
+        if pw.shape != y.shape:
+            raise ValueError("point_weights must have same length as y/x")
+        # sanitize: clamp to [0, 1] and replace NaNs
+        pw = np.clip(np.nan_to_num(pw, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
+    else:
+        pw = None
 
     half = float(window_bp) / 2.0
     ys = np.empty(n, float)
@@ -37,8 +50,7 @@ def lowess_smooth(y, x, window_bp):
         m = np.isfinite(xs) & np.isfinite(ys_win)
         if m.sum() < 2:
             ys[i] = y[i]
-            # fallback: centered finite-diff if possible
-            if 0 < i < n-1:
+            if 0 < i < n-1 and np.isfinite(y[i-1]) and np.isfinite(y[i+1]) and (x[i+1] != x[i-1]):
                 dydx[i] = (y[i+1]-y[i-1]) / (x[i+1]-x[i-1])
             else:
                 dydx[i] = 0.0
@@ -50,7 +62,17 @@ def lowess_smooth(y, x, window_bp):
             ys[i] = ys_loc.mean(); dydx[i] = 0.0
             continue
 
-        w = (1.0 - (dist / dmax)**3)**3  # tricube
+        # tricube distance weights
+        w = (1.0 - (dist / dmax)**3)**3
+
+        # multiply by per-point weights if provided
+        if pw is not None:
+            w *= pw[sl][m]
+
+        # guard against all-zero weights
+        if not np.any(w > 0):
+            ys[i] = ys_loc.mean(); dydx[i] = 0.0
+            continue
 
         # weighted LS for y ~ b0 + b1*x
         X0 = np.ones_like(xs)
@@ -68,32 +90,31 @@ def lowess_smooth(y, x, window_bp):
         b0 = ( t0 * s11 - s01 * t1) / det
         b1 = (-t0 * s01 + s00 * t1) / det
 
-        ys[i]   = b0 + b1 * xi      # LOWESS value
-        dydx[i] = b1                # LOWESS slope (clean derivative)
+        ys[i]   = b0 + b1 * xi
+        dydx[i] = b1
 
-    # simple edge fill for first/last if needed
     if n >= 2:
         dydx[0]  = dydx[1]
         dydx[-1] = dydx[-2]
-        
+
     return ys, dydx
 
 
-def _smooth_region_task(args: Tuple[List[int], List[float], int]) -> List[float]:
+def _smooth_region_task(args: Tuple[List[int], List[float], int, List[float]]) -> List[float]:
     """
     Worker function for parallel smoothing.
-    Args: (positions, fraction_modified, window_bp)
-    Returns: smoothed fraction list (same order as sorted positions)
+    Args: (positions, fraction_modified, window_bp, point_weights)
+    Returns: (smoothed fraction list, smoothed derivative list)
     """
-    positions, fractions, window_bp = args
+    positions, fractions, window_bp, point_weights = args
     if not positions:
         return [], []
 
     x = np.asarray(positions, dtype=float)
     y = np.asarray(fractions, dtype=float)
+    pw = np.asarray(point_weights, dtype=float)
 
-    y_sm, dy_sm = lowess_smooth(y, x, window_bp)
-
+    y_sm, dy_sm = lowess_smooth(y, x, window_bp, point_weights=pw)
     return y_sm.tolist(), dy_sm.tolist()
 
 
@@ -104,13 +125,11 @@ class DataHandler:
         regions_path: Path | str,
         methylation_path: Path | str,
         mod_code: str,
-        bedgraph: bool,
         smooth_window_bp: int = 10000,
         threads: int | None = None,
         debug: bool = False,
     ) -> None:
         self.mod_code = mod_code
-        self.bedgraph = bedgraph
 
         self.smooth_window_bp = smooth_window_bp
         self.threads = threads
@@ -188,19 +207,13 @@ class DataHandler:
                 if not line.strip():
                     continue
                 columns = line.rstrip("\n").split("\t")
-                min_columns = 4 if self.bedgraph else 11
+                min_columns = 18
                 if len(columns) < min_columns:
                     raise TypeError(
                         f"Insufficient columns in {methylation_path}. "
                         "Likely incorrectly formatted."
                     )
-                if self.bedgraph and len(columns) > 4:
-                    warnings.warn(
-                        f"Warning: {methylation_path} has more than 4 columns, and was "
-                        "passed in as bedgraph. Potentially incorrectly formatted bedgraph file.",
-                        stacklevel=2,
-                    )
-                if not self.bedgraph and columns[3] != self.mod_code:
+                if columns[3] != self.mod_code:
                     continue
 
                 chrom = columns[0]
@@ -220,10 +233,10 @@ class DataHandler:
                 entry = methylation_dict[chrom]
                 entry["position"].append(methylation_position)
                 entry["fraction_modified"].append(
-                    float(columns[3]) if self.bedgraph else float(columns[10])
+                    float(columns[10])
                 )
                 entry["valid_coverage"].append(
-                    1.0 if self.bedgraph else float(columns[4])
+                    float(columns[4])
                 )
 
         return methylation_dict
@@ -238,25 +251,35 @@ class DataHandler:
         keys = []
         for key, entry in self.methylation_dict.items():
             if len(entry["position"]) == 0:
-                # still add an empty array for uniformity
                 entry["lowess_fraction_modified"] = []
+                entry["lowess_fraction_modified_dy"] = []
                 continue
+
+            # Build per-point weights from coverage:
+            cov = np.asarray(entry.get("valid_coverage", []), dtype=float)
+            if cov.size == 0:
+                # No per-CpG coverage available → uniform weights
+                pw = np.ones_like(cov if cov.size else np.asarray(entry["position"], float), dtype=float)
+            else:
+                # w = min(cov/10, 1), clipped to [0, 1]
+                pw = np.clip(cov / 10.0, 0.0, 1.0)
+
             keys.append(key)
-            tasks.append((entry["position"], entry["fraction_modified"], self.smooth_window_bp))
+            tasks.append((
+                entry["position"],
+                entry["fraction_modified"],
+                self.smooth_window_bp,
+                pw.tolist(),
+            ))
 
         if not tasks:
             return
 
-        # Use processes for CPU-bound smoothing; allow caller to override worker count
         max_workers = self.threads or os.cpu_count() or 1
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as ex:
-            fut_to_key = {
-                ex.submit(_smooth_region_task, task): key
-                for key, task in zip(keys, tasks)
-            }
+            fut_to_key = {ex.submit(_smooth_region_task, task): key for key, task in zip(keys, tasks)}
             for fut in concurrent.futures.as_completed(fut_to_key):
                 key = fut_to_key[fut]
                 y_sm, dy_sm = fut.result()
-
                 self.methylation_dict[key]["lowess_fraction_modified"] = y_sm
                 self.methylation_dict[key]["lowess_fraction_modified_dy"] = dy_sm

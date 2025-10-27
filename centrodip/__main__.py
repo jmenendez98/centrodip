@@ -37,16 +37,16 @@ def main() -> None:
         help='Modification code to filter bedMethyl file. Selects rows with this as fourth column value. (default: "m")',
     )
     parsing_group.add_argument(
-        "--bedgraph",
-        action="store_true",
-        default=False,
-        help="Treat methylation input as a bedGraph. Takes Fraction Modified from the fourth column. (default: False)",
-    )
-    parsing_group.add_argument(
         "--window-size",
         type=int,
         default=10000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
+    )
+    parsing_group.add_argument(
+        "--cov-conf",
+        type=int,
+        default=10,
+        help="Minimum coverage required to be a confident CpG site. (default: 10)",
     )
 
     dip_detect_group = argparser.add_argument_group('Detection Options')
@@ -135,7 +135,6 @@ def main() -> None:
         methylation_path=args.bedmethyl,
         regions_path=args.regions,
         mod_code=args.mod_code,
-        bedgraph=args.bedgraph,
         smooth_window_bp=args.window_size,
         threads=args.threads,
         debug=args.debug,
