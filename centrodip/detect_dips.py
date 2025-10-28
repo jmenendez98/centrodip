@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import concurrent.futures
-from typing import Dict, Iterable, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 from scipy import signal
 
 
-MethylationRecord = Dict[str, List[float]]
-RegionRecord = Dict[str, List[int]]
-DipResults = Dict[str, Dict[str, List[int]]]
+MethylationRecord = Mapping[str, Sequence[float]]
+MethylationData = Mapping[str, MethylationRecord]
+RegionRecord = Mapping[str, Sequence[int]]
+DipRecord = Dict[str, List[int]]
+DipResults = Dict[str, DipRecord]
+DipIndices = List[Tuple[int, int]]
 
 
 def detectDips(
@@ -23,7 +26,7 @@ def detectDips(
 ) -> DipResults:
     """Detect dips across all chromosomes/regions in the provided data."""
 
-    positions = np.array(data["position"], dtype=int)
+    positions = np.array(data["cpg_pos"], dtype=int)
     smoothed = np.array(data["lowess_fraction_modified"], dtype=float)
     smoothed_dy = np.array(data["lowess_fraction_modified_dy"], dtype=float)
 
@@ -51,9 +54,12 @@ def detectDips(
 
 def find_dip_centers(
     smoothed_methylation: np.ndarray,
-    prominence, height, enrichment    
+    prominence: float,
+    height: float,
+    enrichment: bool,
 ) -> np.ndarray:
     """Return dip center indices in the smoothed methylation data."""
+
     # get info on data range for prominence calculation
     smoothed_methylation = np.array(smoothed_methylation, dtype=float)
     if smoothed_methylation.size == 0:
@@ -64,42 +70,42 @@ def find_dip_centers(
 
     if enrichment:
         centers, _ = signal.find_peaks(
-            smoothed_methylation, 
+            smoothed_methylation,
             prominence=data_prominence_threshold,
-            height=np.percentile(smoothed_methylation, 100-height),
-            wlen=len(smoothed_methylation)
+            height=np.percentile(smoothed_methylation, 100 - height),
+            wlen=len(smoothed_methylation),
         )
     else:
         centers, _ = signal.find_peaks(
-            -smoothed_methylation, 
+            -smoothed_methylation,
             prominence=data_prominence_threshold,
             height=-np.percentile(smoothed_methylation, height),
-            wlen=len(smoothed_methylation)
+            wlen=len(smoothed_methylation),
         )
 
     return centers.astype(int)
 
 
 def find_edge_idxs(
-    data: np.ndarray, dy: np.ndarray,
+    data: np.ndarray,
+    dy: np.ndarray,
     bounding_threshold: float,
     centers: np.ndarray,
-) -> np.ndarray:
+) -> List[Tuple[int, int]]:
     data = np.array(data, dtype=float)
     dy = np.array(dy, dtype=float)
 
     n = data.size
     if n == 0:
-        return np.array([], dtype=int)
+        return []
 
-    edges = []
+    edges: List[Tuple[int, int]] = []
     for c in centers:
         if c < 0:
             continue
 
-        # ----- search left -----
         li = c - 1
-        left_found = None
+        left_found: int | None = None
         while li >= 0:
             val = data[li]
             if np.isfinite(val) and val >= bounding_threshold:
@@ -107,9 +113,8 @@ def find_edge_idxs(
                 break
             li -= 1
         
-        # ----- search right -----
         ri = c + 1
-        right_found = None
+        right_found: int | None = None
         while ri < n:
             val = data[ri]
             if np.isfinite(val) and val >= bounding_threshold:
@@ -117,17 +122,16 @@ def find_edge_idxs(
                 break
             ri += 1
 
-        if (left_found is not None) and (right_found is not None):
-            # find index between c and li with lowest dy value
-            l_search_space = dy[min(c, li):max(c, li)+1]
-            idx_rel = np.argmin(l_search_space)
-            l_idx = min(c, li) + idx_rel
+        if left_found is None or right_found is None:
+            continue
 
-            # find index between c and li with lowest dy value
-            r_search_space = dy[min(c, ri):max(c, ri)+1]
-            idx_rel = np.argmin(r_search_space)
-            r_idx = min(c, ri) + idx_rel
+        l_search_space = dy[min(c, left_found) : max(c, left_found) + 1]
+        left_idx = min(c, left_found) + int(np.argmin(l_search_space))
 
-            edges.append((l_idx, r_idx))
+        r_search_space = dy[min(c, right_found) : max(c, right_found) + 1]
+        right_idx = min(c, right_found) + int(np.argmin(r_search_space))
 
-    return list(dict.fromkeys(map(tuple, edges)))
+        edges.append((left_idx, right_idx))
+
+    unique_edges = list(dict.fromkeys(tuple(edge) for edge in edges))
+    return [(int(left), int(right)) for left, right in unique_edges]

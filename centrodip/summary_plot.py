@@ -26,23 +26,6 @@ def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
     return left, right
 
 
-def _ordered_positions(
-    record: MethylationRecord, key: str
-) -> Tuple[Sequence[float], Sequence[float]]:
-    positions = list(record.get("position", []))
-    values = list(record.get(key, []))
-
-    if not positions or not values:
-        return [], []
-
-    length = min(len(positions), len(values))
-    order = sorted(range(length), key=positions.__getitem__)
-    return (
-        [positions[idx] for idx in order],
-        [values[idx] for idx in order],
-    )
-
-
 def _position_edges(positions: Sequence[float]) -> np.ndarray:
     if not positions:
         return np.asarray([])
@@ -64,7 +47,6 @@ def _fraction_window_bins(
     values: Sequence[float],
     region_start: int,
     region_end: int,
-    *,
     window_size: float = 1000.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     if not positions or not values:
@@ -173,35 +155,42 @@ def _filter_dips_for_region(
 
 def _plot_band(
     ax: plt.Axes,
-    record: MethylationRecord,
-    region_start: int,
-    region_end: int,
-    value_key: str,
+    x,
+    val: str,
     y_bottom: float,
     y_top: float,
     norm: Normalize,
 ) -> None:
-    positions, values = _ordered_positions(record, value_key)
-    if not positions or not values:
+    if not x or not val:
         return
 
-    edges_x = _position_edges(positions)
-    if len(edges_x) < 2:
-        return
+    # to arrays
+    x_arr = np.asarray(x, dtype=float)
+    v_arr = np.asarray(val, dtype=float)
 
-    data = np.ma.masked_invalid(np.asarray(values, dtype=float)[np.newaxis, :])
+    # length check
+    n = min(x_arr.size, v_arr.size)
+    if n == 0:
+        return
+    x_arr = x_arr[:n]
+    v_arr = v_arr[:n]
+
+    edges_x = _position_edges(x_arr)
+    if edges_x.size < 2:
+        return  # nothing to draw
+
+    # build a single-row "image": shape (1, n_cells)
+    data = np.ma.masked_invalid(v_arr[np.newaxis, :])
     edges_y = np.asarray([y_bottom, y_top], dtype=float)
 
-    cmap = plt.get_cmap("Greys")
     ax.pcolormesh(
         edges_x,
         edges_y,
         data,
         shading="auto",
-        cmap=cmap,
+        cmap=plt.get_cmap(cmap_name),
         norm=norm,
     )
-
 
 def _plot_fraction_line(
     ax: plt.Axes,
@@ -289,23 +278,16 @@ def _add_track_legends(
     coverage_cbar.ax.set_xlabel("Cov", fontsize=6, labelpad=-3)
 
 
-def centrodip_summary_plot(
-    regions_per_chrom: RegionDict,
-    methylation_per_region: MethylationDict,
-    final_dips: DipDict,
+def centrodipSummaryPlot(
+    results,
     output_path: Path | str,
-    *,
-    unfiltered_dips: DipDict | None = None,
     panel_height: float = 2.0,
     figure_width: float = 16.0,
 ) -> Path:
 
     chromosomes: List[str] = []
-    for chrom, coords in regions_per_chrom.items():
-        starts = coords.get("starts", []) if coords else []
-        ends = coords.get("ends", []) if coords else []
-        if starts and ends:
-            chromosomes.append(chrom)
+    for chrom in results.keys():
+        chromosomes.append(chrom)
 
     chromosomes.sort()
 
@@ -322,110 +304,92 @@ def centrodip_summary_plot(
     )
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
-    plot_unfiltered = bool(unfiltered_dips)
 
     for axis_row, chrom in zip(axes, chromosomes):
         ax = axis_row[0]
-        coords = regions_per_chrom.get(chrom, {})
-        starts = coords.get("starts", []) if coords else []
-        ends = coords.get("ends", []) if coords else []
-        regions = [(int(start), int(end)) for start, end in zip(starts, ends)]
-        if not regions:
-            ax.set_visible(False)
-            continue
+        chrom_results = results.get(chrom, {})
 
-        x_min = min(min(start, end) for start, end in regions)
-        x_max = max(max(start, end) for start, end in regions)
+        cpg_pos = chrom_results.get("cpg_pos", [])
+        cpg_coverage = chrom_results.get("valid_coverage", [])
+        frac_mod = chrom_results.get("fraction_modified", [])
+        lowess_frac_mod = chrom_results.get("lowess_fraction_modified", [])
+
+        x_min = min(cpg_pos)
+        x_max = max(cpg_pos)
         if x_min == x_max:
-            x_min -= 0.5
-            x_max += 0.5
+            x_min -= 10000
+            x_max += 10000
 
-        _plot_regions(ax, regions)
+        # _plot_regions(ax, regions)
 
-        chrom_methylation = methylation_per_region.get(chrom, {})
-        chrom_final_dips = final_dips.get(chrom, {})
-        chrom_unfiltered_dips = (
-            unfiltered_dips.get(chrom, {}) if plot_unfiltered and unfiltered_dips else {}
+
+        # plot coverage bar
+        _plot_band(
+            ax=ax,
+            x=cpg_pos,
+            val=cpg_coverage,
+            y_bottom=1.0, y_top=1.5,
+            norm=coverage_norm,
         )
 
-        for start, end in regions:
-            methylation = _slice_methylation_record(chrom_methylation, start, end)
+        # plot the raw fraction modified values as a line
+        _plot_fraction_line(
+            ax=ax,
+            xpos=cpg_pos,
+            val=frac_mod,
+            alpha=0.25,
+            color="black",
+        )
 
-           # plot coverage bar
-            _plot_band(
-                ax,
-                methylation,
-                start,
-                end,
-                "valid_coverage",
-                1.0,
-                1.5,
-                coverage_norm,
+        # plot the smoothed LOWESS fraction modified line
+        _plot_fraction_line(
+            ax=ax,
+            xpos=cpg_pos,
+            val=lowess_frac_mod,
+            alpha=0.75,
+            color="orange",
+        )
+
+        # plot unfiltered dips
+        unfiltered_dip_starts = chrom_results.get("unfiltered_dip_starts", []) if coords else []
+        unfiltered_dip_ends = chrom_results.get("unfiltered_dip_ends", []) if coords else []
+        _plot_dips(
+            ax=ax,
+            starts=unfiltered_dip_starts,
+            ends=unfiltered_dip_ends,
+            y_bottom=3.6,
+            height=0.35,
+            color="tab:blue",
+            alpha=0.4,
+            zorder=3,
             )
 
-            # plot the raw fraction modified values as a line
-            _plot_fraction_line(
-                ax=ax,
-                record=methylation,
-                column="fraction_modified",
-                region_start=start,
-                region_end=end,
-                alpha=0.25,
-                color="black",
-            )
+        # plot final dips
+        dip_starts = chrom_results.get("dip_starts", []) if coords else []
+        dip_ends = chrom_results.get("dip_ends", []) if coords else []
+        _plot_dips(
+            ax=ax,
+            starts=dip_starts,
+            ends=dip_ends,
+            y_bottom=3.0,
+            height=0.5,
+            color="black",
+            alpha=0.7,
+            zorder=2,
+        )
 
-            # plot the smoothed LOWESS fraction modified line
-            _plot_fraction_line(
-                ax=ax,
-                record=methylation,
-                column="lowess_fraction_modified",
-                region_start=start,
-                region_end=end,
-                alpha=0.75,
-                color="orange",
-            )
-
-            _plot_dips(
-                ax,
-                _filter_dips_for_region(chrom_final_dips, start, end),
-                y_bottom=3.0,
-                height=0.5,
-                color="black",
-                alpha=0.7,
-                zorder=2,
-            )
-
-            if plot_unfiltered:
-                _plot_dips(
-                    ax,
-                    _filter_dips_for_region(chrom_unfiltered_dips, start, end),
-                    y_bottom=3.6,
-                    height=0.35,
-                    color="tab:blue",
-                    alpha=0.4,
-                    zorder=3,
-                )
 
         ax.set_xlim(x_min, x_max)
-        if plot_unfiltered:
-            ax.set_ylim(0, 4.2)
-            ax.set_yticks([0.5, 1.25, 2.25, 3.25, 3.775])
-            ax.set_yticklabels([
-                "Regions",
-                "Coverage",
-                "FracMod",
-                "Filtered dips",
-                "Unfiltered dips",
-            ])
-        else:
-            ax.set_ylim(0, 4)
-            ax.set_yticks([0.5, 1.25, 2.25, 3.25])
-            ax.set_yticklabels([
-                "Regions",
-                "Coverage",
-                "FracMod",
-                "Dips",
-            ])
+        ax.set_ylim(0, 4.2)
+        ax.set_yticks([0.5, 1.25, 2.25, 3.25, 3.775])
+        ax.set_yticklabels([
+            "Regions",
+            "Coverage",
+            "FracMod",
+            "Filtered dips",
+            "Unfiltered dips",
+        ])
+
         ax.set_ylabel(f"{chrom}")
         ax.tick_params(axis=u'y', which=u'both', length=0)
         ax.grid(False)

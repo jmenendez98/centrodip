@@ -11,7 +11,7 @@ from .load_data import DataHandler
 from .lowess_smooth import lowessSmooth
 from .detect_dips import detectDips
 from .filter_dips import filterDips
-from .summary_plot import centrodip_summary_plot
+from .summary_plot import centrodipSummaryPlot
 
 
 def single_chromosome_task(
@@ -23,18 +23,18 @@ def single_chromosome_task(
     min_size: int, min_zscore: float, cluster_distance: float,
     debug,
 ):
-    positions = data.get("position", [])
-    fractions = data.get("fraction_modified", [])
+    positions = data.get("cpg_pos", [])
+    fraction_modified = data.get("fraction_modified", [])
     coverage = data.get("valid_coverage", [])
 
-    if len(positions) != len(fractions):
+    if len(positions) != len(fraction_modified):
         raise ValueError(
-            f"Chromosome {chrom}: mismatch between positions ({len(positions)}) and fraction_modified ({len(fractions)})."
+            f"Chromosome {chrom}: mismatch between positions ({len(positions)}) and fraction_modified ({len(fraction_modified)})."
         )
 
     # calculate smoothing + dy, add them to data dict
     smoothed, derivative = lowessSmooth(
-        y=fractions, x=positions, c=coverage,
+        y=fraction_modified, x=positions, c=coverage,
         window_bp=window_size, cov_conf=cov_conf,
     )
     data["lowess_fraction_modified"] = np.array(smoothed, dtype=float)
@@ -46,19 +46,19 @@ def single_chromosome_task(
         prominence=prominence, height=height, enrichment=enrichment, broadness=broadness,
         debug=debug,
     )
+    data["unfiltered_dip_starts"] = dips["starts"]
+    data["unfiltered_dip_ends"] = dips["ends"]
 
     # filter the dips
     final_dips = filterDips(
-        dips, dip_idxs, fractions,
+        dips, dip_idxs, 
+        fraction_modified,
         min_size=min_size, min_zscore=min_zscore, cluster_distance=cluster_distance
     )
+    data["dip_starts"] = final_dips["starts"]
+    data["dip_ends"] = final_dips["ends"]
 
-    print(chrom)
-    #print(dips)
-    #print(final_dips)
-    #print()
-
-    # return chrom, result
+    return chrom, data
 
 
 def main() -> None:
@@ -201,7 +201,7 @@ def main() -> None:
                 args.window_size, args.cov_conf,                        # smoothing arguments
                 args.prominence, args.height, args.broadness,           # dip detection args
                 args.enrichment,
-                args.min_size, args.min_z_score, args.cluster_distance,
+                args.min_size, args.min_z_score, args.cluster_distance, # dip filtering args
                 args.debug,
             )
             futures.append(fut)
@@ -211,22 +211,25 @@ def main() -> None:
             chrom, result = fut.result()  # handle exceptions here if desired
             results_by_chrom[chrom] = result
             if args.debug:
-                print(f"[DEBUG] Completed {chrom}: {result}")
+                print(f"[DEBUG] Completed {chrom}.")
 
     raw_dips: Dict[str, Dict[str, List[Union[float, int]]]] = {}
+
+    print(results_by_chrom.keys())
+    print(results_by_chrom["chrX"].keys())
 
     # if debug is on, write out the smoothed values
     if args.debug:
         with open(f"{output_prefix}.debug.smooth_frac_mod.bedgraph", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in input_data.methylation_dict.items():
+            for region, values in results_by_chrom.items():
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
 
-                assert len(values.get("position", [])) == len(values.get("lowess_fraction_modified", [])), "Error mismatch size in output data."
-                for i in range(len(values.get("position", []))):
-                    start = values["position"][i]
+                assert len(values.get("cpg_pos", [])) == len(values.get("lowess_fraction_modified", [])), "Error mismatch size in output data."
+                for i in range(len(values.get("cpg_pos", []))):
+                    start = values["cpg_pos"][i]
                     frac_mod = values["lowess_fraction_modified"][i]
                     lines.append(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
             lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
@@ -234,76 +237,44 @@ def main() -> None:
 
         with open(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in input_data.methylation_dict.items():
+            for region, values in results_by_chrom.items():
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
 
-                assert len(values.get("position", [])) == len(values.get("lowess_fraction_modified_dy", [])), "Error mismatch size in output data."
-                for i in range(len(values.get("position", []))):
-                    start = values["position"][i]
+                assert len(values.get("cpg_pos", [])) == len(values.get("lowess_fraction_modified_dy", [])), "Error mismatch size in output data."
+                for i in range(len(values.get("cpg_pos", []))):
+                    start = values["cpg_pos"][i]
                     frac_mod = values["lowess_fraction_modified_dy"][i]
                     lines.append(f"{chrom}\t{start}\t{start + 1}\t{frac_mod}\n")
             lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
             handle.writelines(lines)
 
-    # if debug is on, write out the dip centers and edges
-    if args.debug:
-        with open(f"{output_prefix}.debug.dip_centers.bed", "w", encoding="utf-8") as handle:
-            lines = []
-            for chrom, values in raw_dips.items():
-                if not values:
-                    continue
-                for pos in values.get("dip_centers", []) or []:
-                    start = int(pos)
-                    lines.append(f"{chrom}\t{start}\t{start + 1}\n")
-            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
-            handle.writelines(lines)
-
-        with open(f"{output_prefix}.debug.dip_edges.bed", "w", encoding="utf-8") as handle:
-            lines = []
-            for chrom, values in raw_dips.items():
-                if not values:
-                    continue
-                for pos in values.get("dip_edges", []) or []:
-                    start = int(pos)
-                    lines.append(f"{chrom}\t{start}\t{start + 1}\n")
-            lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
-            handle.writelines(lines) 
-
         with open(f"{output_prefix}.debug.no_filt_dips.bed", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in raw_dips.items():
+            for region, values in results_by_chrom.items():
                 if not values:
                     continue
                 chrom = region.split(":", 1)[0]
-                assert len(values.get("starts", [])) == len(values.get("ends", [])), "Mismatched dip starts and ends lengths in debug output."
-                for i in range(len(values.get("starts", []))):
-                    start = values["starts"][i]
-                    end = values["ends"][i]
+                assert len(values.get("unfiltered_dip_starts", [])) == len(values.get("unfiltered_dip_ends", [])), "Mismatched dip starts and ends lengths in debug output."
+                for i in range(len(values.get("unfiltered_dip_starts", []))):
+                    start = values["unfiltered_dip_starts"][i]
+                    end = values["unfiltered_dip_ends"][i]
                     lines.append(f"{chrom}\t{start}\t{end}\n")
             lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
             handle.writelines(lines)
 
-    # -- filter dips --
-    final_dips = filterDips(
-        dip_dict=raw_dips,
-        min_size=args.min_size,
-        min_zscore=args.min_z_score,
-        cluster_distance=args.cluster_distance,
-    )
-
     # write final dips to output BED file
     with open(f"{output_prefix}.bed", "w", encoding="utf-8") as handle:
         lines = []
-        for region, values in final_dips.items():
+        for region, values in results_by_chrom.items():
             if not values:
                 continue
             chrom = region.split(":", 1)[0]
-            assert len(values.get("starts", [])) == len(values.get("ends", [])), "Mismatched dip starts and ends lengths in debug output."
-            for i in range(len(values.get("starts", []))):
-                start = values["starts"][i]
-                end = values["ends"][i]
+            assert len(values.get("dip_starts", [])) == len(values.get("dip_ends", [])), "Mismatched dip starts and ends lengths in debug output."
+            for i in range(len(values.get("dip_starts", []))):
+                start = values["dip_starts"][i]
+                end = values["dip_ends"][i]
                 lines.append(f"{chrom}\t{start}\t{end}\t{args.label}\t0\t.\t{start}\t{end}\t{args.color}\n")
         lines.sort(key=lambda x: (x.split("\t")[0], int(x.split("\t")[1])))
         handle.writelines(lines)
@@ -311,11 +282,8 @@ def main() -> None:
     # -- make summary plot --
     if args.plot:
         summary_path = f"{output_prefix}.centrodip_summary.png"
-        centrodip_summary_plot(
-            regions_per_chrom=input_data.region_dict,
-            methylation_per_region=input_data.methylation_dict,
-            final_dips=final_dips,
-            unfiltered_dips=raw_dips,
+        centrodipSummaryPlot(
+            results=results_by_chrom,
             output_path=summary_path
         )
 

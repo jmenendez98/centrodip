@@ -1,163 +1,14 @@
 from __future__ import annotations
 
-import math
-import numpy as np
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
+from typing import Dict, Mapping, Sequence, List, Tuple
+
+import numpy as np
 
 
-DipRecord = Dict[str, List[int]]
+DipRecord = Dict[str, list[int]]
 DipResults = Dict[str, DipRecord]
-
-
-def _filter_record(record: DipRecord, mask: Sequence[bool]) -> DipRecord:
-    filtered: DipRecord = {}
-    for key, values in record.items():
-        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
-            if key in {"starts", "ends"} or len(values) == len(mask):
-                filtered[key] = [value for value, keep in zip(values, mask) if keep]
-            else:
-                filtered[key] = list(values)
-        else:
-            filtered[key] = values
-    return filtered
-
-
-def filter_by_size(
-    dips: DipRecord, 
-    min_size: int
-) -> DipRecord:
-    """Simple filter based on an entry size"""
-    if min_size <= 0:
-        return dips
-
-    starts = list(dips.get("starts", []))
-    ends = list(dips.get("ends", []))
-
-    if not starts or not ends:
-        return dips
-
-    mask: List[bool] = []
-    for start, end in zip(starts, ends):
-        mask.append(abs(end - start) < min_size)
-
-    if all(mask):
-        return dips
-
-    return _filter_record(dips, mask)
-
-def filter_by_value(
-    dips: DipRecord, 
-    min_value_zscore: float
-) -> DipRecord:
-    """Filter entry based on z-scoring threshold of CpG values within it"""
-
-    # If the threshold is non-positive, do nothing (no filtering).
-    if min_value_zscore <= 0:
-        return dips
-
-    starts = list(dips.get("starts", []))
-    ends = list(dips.get("ends", []))
-    if not starts or not ends:
-        return dips
-
-    # fetch CpG positions within entry
-    positions = dips.get("positions") or dips.get("position")
-    if positions is None:
-        positions = dips.get("cpg_sites")
-
-    # fetch CpG frac mod values within entry
-    values = (dips.get("lowess_fraction_modified"))
-    if positions is None or values is None:
-        return dips
-
-    positions_list = list(positions)
-    values_list = list(values)
-    if len(positions_list) != len(values_list) or not positions_list:
-        return dips
-
-    points = [(int(pos), float(val)) for pos, val in zip(positions_list, values_list)]
-
-    mask: List[bool] = []
-    for start, end in zip(starts, ends):
-        left, right = sorted((int(start), int(end)))
-        inside_values = [value for pos, value in points if left <= pos <= right]
-        outside_values = [value for pos, value in points if pos < left or pos > right]
-        if not inside_values or not outside_values:
-            mask.append(True)
-            continue
-
-        # Compute means for inside/outside and stdev for outside.
-        inside_mean = sum(inside_values) / float(len(inside_values))
-        outside_mean = sum(outside_values) / float(len(outside_values))
-        outside_std = np.std(outside_values)
-
-        if outside_std <= 1e-9:
-            mask.append(inside_mean + 1e-9 < outside_mean)
-            continue
-
-        # mask out entry if inside mean isn't `min_value_zscore` away from outside mean
-        z_score = (outside_mean - inside_mean) / outside_std
-        mask.append(z_score >= min_value_zscore)
-
-    if all(mask):
-        return dips
-
-    return _filter_record(dips, mask)
-
-def filter_by_cluster(record: DipRecord, cluster_distance: int) -> DipRecord:
-    
-    # if cluster distance is negative skip filtering
-    if cluster_distance < 0:
-        return record
-
-    starts = list(record.get("starts", []))
-    ends = list(record.get("ends", []))
-    if not starts or not ends or len(starts) <= 1: # if there is 0 or 1 entry no need to cluster
-        return record 
-
-    clusters: List[List[tuple[int, int, int]]] = []
-    current: List[tuple[int, int, int]] = []
-    current_end: int | None = None
-    for index, (start, end) in enumerate(zip(starts, ends)):
-        if current and current_end is not None and start - current_end > cluster_distance:
-            clusters.append(current)
-            current = []
-        current.append((start, end, index))
-        current_end = max(current_end, end) if current_end is not None else end
-
-    if current: # add the last cluster to the cluster list
-        clusters.append(current)
-
-    if len(clusters) <= 1: # if everything is in one cluster just return it...
-        return record
-
-    def cluster_score(cluster: List[tuple[int, int, int]]) -> tuple[int, int, int]:
-        indices = [idx for _, _, idx in cluster]
-        coverage = 0
-
-        # calculate the spans of each cluster
-        ordered = sorted((start, end) for start, end, _ in cluster)
-        span_start, span_end = ordered[0]
-        for start, end in ordered[1:]:
-            if start <= span_end:
-                span_end = max(span_end, end)
-            else:
-                coverage += max(0, span_end - span_start)
-                span_start, span_end = start, end
-        coverage += max(0, span_end - span_start)
-
-        count = len(cluster) # how many items are in a cluster
-        first_start = min(start for start, _ in ordered) # used in order to break a tie in scoring (should be rare) ...
-        return coverage, count, -first_start
-
-    best_cluster = max(clusters, key=cluster_score) # chose cluster with highest score
-    keep_indices = {idx for *_, idx in best_cluster} 
-    mask = [index in keep_indices for index in range(len(starts))] # mask out all of the other ones
-
-    if all(mask):
-        return record
-    return _filter_record(record, mask)
+IdxPairs = List[Tuple[int, int]]
 
 
 def filterDips(
@@ -171,25 +22,219 @@ def filterDips(
 
     # size filter
     filtered, filtered_idxs = filter_by_size(
-        dips, min_size
+        dips, dip_idxs, 
+        min_size
     ) 
-    # print(f"filter1: {filtered}")
 
     # zscore filter
-    filtered, filtered_idxs = filter_by_value(
+    filtered, filtered_idxs = filter_by_zscore(
         filtered, filtered_idxs, 
         fraction_modified, 
         min_zscore
     ) 
-    # print(f"filter2: {filtered}")
 
     # cluster filter
     filtered, filtered_idxs = filter_by_cluster(
-        filtered, cluster_distance
-    ) 
-    # print(f"filter3: {filtered}")
+        filtered, filtered_idxs,
+        cluster_distance
+    )
 
     return filtered
+
+
+def _apply_masking(
+    record: DipRecord,
+    dip_idxs: Optional[IdxPairs],
+    mask: Sequence[bool],
+) -> Tuple[DipRecord, Optional[IdxPairs]]:
+    """Filter DipRecord (starts/ends and any fields with same length) and dip_idxs by mask."""
+    filtered: DipRecord = {}
+    mlist = list(mask)
+    n_mask = len(mlist)
+    for key, values in record.items():
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+            # filter lists that match the number of dips (e.g., starts/ends and any parallel lists)
+            if key in {"starts", "ends"} or len(values) == n_mask:
+                filtered[key] = [v for v, keep in zip(values, mlist) if keep]
+            else:
+                filtered[key] = list(values)
+        else:
+            filtered[key] = values
+
+    filtered_idxs = None
+    if dip_idxs is not None:
+        filtered_idxs = [p for p, keep in zip(dip_idxs, mlist) if keep]
+    return filtered, filtered_idxs
+
+
+def filter_by_size(
+    dips: DipRecord, 
+    dip_idxs: Optional[IdxPairs],
+    min_size: int
+) -> Tuple[DipRecord, Optional[IdxPairs]]:
+    """Keep only dips whose span >= min_size (in bp)."""
+    if min_size is None or min_size <= 0:
+        return dips, dip_idxs
+
+    starts = list(dips.get("starts", []))
+    ends = list(dips.get("ends", []))
+    if not starts or not ends or len(starts) != len(ends):
+        return dips, dip_idxs
+
+    mask: List[bool] = []
+    for s, e in zip(starts, ends):
+        mask.append(abs(int(e) - int(s)) < int(min_size))
+
+    if all(mask):
+        return dips, dip_idxs
+    return _apply_masking(dips, dip_idxs, mask)
+
+
+def filter_by_zscore(
+    dips: DipRecord,
+    dip_idxs: Optional[IdxPairs],
+    fraction_modified: Sequence[float],
+    min_value_zscore: float
+) -> Tuple[DipRecord, Optional[IdxPairs]]:
+    """
+    Keep dips whose inside-mean is at least `min_value_zscore` SDs lower than the outside mean:
+        z = (outside_mean - inside_mean) / outside_std  >=  threshold
+    Uses dip_idxs (index pairs into fraction_modified) for fast slicing.
+    """
+    if min_value_zscore is None or min_value_zscore <= 0:
+        return dips, dip_idxs
+
+    if dip_idxs is None:
+        # For zscore filtering we require index pairs for efficiency and correctness.
+        # You can relax this if you want to fall back to position-based scans.
+        return dips, dip_idxs  # or raise ValueError("dip_idxs required for zscore filtering")
+
+    starts = dips.get("starts", [])
+    ends = dips.get("ends", [])
+    if not starts or not ends or len(starts) != len(ends):
+        return dips, dip_idxs
+
+    values = np.asarray(fraction_modified, dtype=float)
+    n = values.size
+    if n == 0:
+        return dips, dip_idxs
+
+    # Precompute global stats once for fallback cases
+    global_mean = float(np.mean(values))
+    global_std = float(np.std(values))
+
+    mask: List[bool] = []
+    for (li, ri), s, e in zip(dip_idxs, starts, ends):
+        # sanitize indices
+        l = max(0, min(int(li), n - 1))
+        r = max(0, min(int(ri), n - 1))
+        if l > r:
+            l, r = r, l
+
+        inside = values[l:r + 1]
+        # outside = all points before l and after r
+        if l == 0 and r == n - 1:
+            outside = np.array([], dtype=float)
+        elif l == 0:
+            outside = values[r + 1:]
+        elif r == n - 1:
+            outside = values[:l]
+        else:
+            # concatenate without copying huge arrays unnecessarily
+            left = values[:l]
+            right = values[r + 1:]
+            # Avoid making a big copy when both sides are large:
+            outside = np.concatenate((left, right)) if left.size and right.size else (left if left.size else right)
+
+        if inside.size == 0:
+            # if we can't measure inside, conservatively keep
+            mask.append(True)
+            continue
+
+        if outside.size == 0:
+            # if there's no outside, fall back to global stats (if meaningful)
+            if global_std <= 1e-9:
+                mask.append(False)  # cannot establish contrast; drop
+                continue
+            inside_mean = float(np.mean(inside))
+            z = (global_mean - inside_mean) / global_std
+            mask.append(z >= min_value_zscore)
+            continue
+
+        inside_mean = float(np.mean(inside))
+        outside_mean = float(np.mean(outside))
+        outside_std = float(np.std(outside))
+
+        if outside_std <= 1e-9:
+            # if outside is nearly constant, require strictly lower inside mean
+            mask.append(inside_mean + 1e-9 < outside_mean)
+            continue
+
+        # remove dips with z-score smaller (less sig) than min_value_zscore
+        z = (outside_mean - inside_mean) / outside_std
+        mask.append(z < min_value_zscore)
+
+    if all(mask):
+        return dips, dip_idxs
+
+    return _apply_masking(dips, dip_idxs, mask)
+
+def filter_by_cluster(
+    record: DipRecord,
+    dip_idxs: Optional[IdxPairs],
+    cluster_distance: int
+) -> Tuple[DipRecord, Optional[IdxPairs]]:
+
+    # skip if negative
+    if cluster_distance is None or cluster_distance < 0:
+        return record, dip_idxs
+
+    starts = list(record.get("starts", []))
+    ends = list(record.get("ends", []))
+    if not starts or not ends or len(starts) <= 1:
+        return record, dip_idxs
+
+    # Build clusters in input order (assumes starts/ends are co-sorted)
+    clusters: List[List[tuple[int, int, int]]] = []
+    current: List[tuple[int, int, int]] = []
+    current_end: Optional[int] = None
+    for index, (start, end) in enumerate(zip(starts, ends)):
+        s = int(start); e = int(end)
+        if current and current_end is not None and s - current_end > int(cluster_distance):
+            clusters.append(current)
+            current = []
+        current.append((s, e, index))
+        current_end = max(current_end, e) if current_end is not None else e
+    if current:
+        clusters.append(current)
+
+    if len(clusters) <= 1:
+        return record, dip_idxs
+
+    def cluster_score(cluster: List[tuple[int, int, int]]) -> tuple[int, int, int]:
+        # coverage of merged intervals, number of items, tie-breaker by earliest start
+        ordered = sorted((s, e) for s, e, _ in cluster)
+        coverage = 0
+        span_s, span_e = ordered[0]
+        for s, e in ordered[1:]:
+            if s <= span_e:
+                span_e = max(span_e, e)
+            else:
+                coverage += max(0, span_e - span_s)
+                span_s, span_e = s, e
+        coverage += max(0, span_e - span_s)
+        count = len(cluster)
+        first_start = min(s for s, _ in ordered)
+        return coverage, count, -first_start
+
+    best_cluster = max(clusters, key=cluster_score)
+    keep_indices = {idx for *_unused, idx in best_cluster}
+    mask = [(i in keep_indices) for i in range(len(starts))]
+
+    if all(mask):
+        return record, dip_idxs
+    return _apply_masking(record, dip_idxs, mask)
+
 
 
 __all__ = ["filterDips"]

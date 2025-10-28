@@ -133,7 +133,7 @@ class DataHandler:
         as soon as each chromosome block is finished.
 
         Yields:
-            {chrom: {"position": [...], "fraction_modified": [...], "valid_coverage": [...]}}
+            {chrom: {"cpg_pos": [...], "fraction_modified": [...], "valid_coverage": [...]}}
         """
         rpath = self.regions_path
         mpath = self.methylation_path
@@ -153,7 +153,7 @@ class DataHandler:
 
         current_chrom: Optional[str] = None
         payload: Dict[str, List[float | int]] = {
-            "position": [],
+            "cpg_pos": [],
             "fraction_modified": [],
             "valid_coverage": [],
         }
@@ -161,9 +161,9 @@ class DataHandler:
         def _flush():
             """Yield current chrom if we have collected any data."""
             nonlocal payload, current_chrom
-            if current_chrom and payload["position"]:
+            if current_chrom and payload["cpg_pos"]:
                 yield {current_chrom: {
-                    "position": payload["position"],
+                    "cpg_pos": payload["cpg_pos"],
                     "fraction_modified": payload["fraction_modified"],
                     "valid_coverage": payload["valid_coverage"],
                 }}
@@ -194,7 +194,7 @@ class DataHandler:
                     # reset for new chrom
                     current_chrom = chrom
                     payload = {
-                        "position": [],
+                        "cpg_pos": [],
                         "fraction_modified": [],
                         "valid_coverage": [],
                     }
@@ -210,7 +210,7 @@ class DataHandler:
                     r_start = starts[idx]
                     r_end = ends[idx]
                     if r_start < pos < r_end:
-                        payload["position"].append(pos)
+                        payload["cpg_pos"].append(pos)
                         payload["fraction_modified"].append(float(cols[10]))
                         payload["valid_coverage"].append(float(cols[4]))
 
