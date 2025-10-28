@@ -10,19 +10,7 @@ import numpy as np
 import os
 
 
-def _cov_to_weights(
-    coverage,
-    cov_conf
-):
-    """Input an array of valid coverage. Returns an array of LOWESS weights based on coverage."""
-    coverage = np.asarray(coverage, dtype=int)
-    if cov_conf <= 0:
-        raise ValueError("cov_conf must be greater than 0.")
-    weights = np.minimum(coverage / cov_conf, 1.0)
-    return weights
-
-
-def lowess_smooth(
+def lowessSmooth(
     y, x, c, 
     window_bp, cov_conf
 ):
@@ -110,3 +98,15 @@ def lowess_smooth(
         dydx[-1] = dydx[-2]
 
     return ys, dydx
+
+
+def _cov_to_weights(
+    coverage,
+    cov_conf
+):
+    """Input an array of valid coverage. Returns an array of LOWESS weights based on coverage."""
+    coverage = np.asarray(coverage, dtype=int)
+    if cov_conf <= 0:
+        raise ValueError("cov_conf must be greater than 0.")
+    weights = np.minimum(coverage / cov_conf, 1.0)
+    return weights

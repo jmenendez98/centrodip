@@ -8,7 +8,8 @@ from typing import Dict, Iterable, List, Union
 import numpy as np
 
 from .load_data import DataHandler
-from .lowess_smooth import lowess_smooth
+from .lowess_smooth import lowessSmooth
+from .detect_dips import detectDips
 from .filter_dips import filterDips
 from .summary_plot import centrodip_summary_plot
 
@@ -17,28 +18,44 @@ def single_chromosome_task(
     chrom: str,
     data: Dict[str, List[Union[float, int]]],
     window_size: int, cov_conf: float,
+    prominence: float, height: float, broadness: float,
+    enrichment: bool,
+    min_size: int, min_zscore: float, cluster_distance: float,
+    debug,
 ):
+    positions = data.get("position", [])
+    fractions = data.get("fraction_modified", [])
+    coverage = data.get("valid_coverage", [])
+
     if len(positions) != len(fractions):
         raise ValueError(
             f"Chromosome {chrom}: mismatch between positions ({len(positions)}) and fraction_modified ({len(fractions)})."
         )
 
-    positions = data.get("position", [])
-    fractions = data.get("fraction_modified", [])
-    coverage = data.get("valid_coverage", [])
-
     # calculate smoothing + dy, add them to data dict
-    smoothed, derivative = lowess_smooth(
+    smoothed, derivative = lowessSmooth(
         y=fractions, x=positions, c=coverage,
         window_bp=window_size, cov_conf=cov_conf,
     )
-    data["lowess_fraction_modified"] = smoothed.tolist()
-    data["lowess_fraction_modified_dy"] = derivative.tolist()
+    data["lowess_fraction_modified"] = np.array(smoothed, dtype=float)
+    data["lowess_fraction_modified_dy"] = np.array(derivative, dtype=float)
 
-    # 
+    # find the dip positons
+    dips = detectDips(
+        data,
+        prominence=prominence, height=height, enrichment=enrichment, broadness=broadness,
+        debug=debug,
+    )
 
+    # filter the dips
+    final_dips = filterDips(
+        dips,
+        min_size=min_size, min_zscore=min_zscore, cluster_distance=cluster_distance
+    )
 
-    return chrom, result
+    print(dips)
+
+    # return chrom, result
 
 
 def main() -> None:
@@ -176,10 +193,13 @@ def main() -> None:
             # print(chrom, methylation_data[chrom].keys())
 
             fut = ex.submit(
-                single_chromosome_task,             # parallelized task name
-                chrom, methylation_data[chrom],     # data
-                args.window_size, args.cov_conf,    # smoothing arguments
+                single_chromosome_task,                                 # parallelized task name
+                chrom, methylation_data[chrom],                         # data
+                args.window_size, args.cov_conf,                        # smoothing arguments
+                args.prominence, args.height, args.broadness,           # dip detection args
+                args.enrichment,
 
+                args.debug,
             )
             futures.append(fut)
 
