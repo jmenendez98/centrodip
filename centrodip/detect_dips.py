@@ -47,7 +47,7 @@ def detectDips(
     dips = {"starts": [], "ends": []}
     for dli, dri in dip_edge_idxs:
         dips["starts"].append(positions[dli])
-        dips["ends"].append(positions[dli])
+        dips["ends"].append(positions[dri])
 
     return dips, dip_edge_idxs
 
@@ -104,6 +104,7 @@ def find_edge_idxs(
         if c < 0:
             continue
 
+        # left search
         li = c - 1
         left_found: int | None = None
         while li >= 0:
@@ -112,7 +113,10 @@ def find_edge_idxs(
                 left_found = li
                 break
             li -= 1
+        if li == 0:
+            left_found=li
         
+        # right search
         ri = c + 1
         right_found: int | None = None
         while ri < n:
@@ -121,17 +125,21 @@ def find_edge_idxs(
                 right_found = ri
                 break
             ri += 1
+        if ri == n:
+            right_found=ri
 
         if left_found is None or right_found is None:
             continue
 
+        # keep left value with the lowest slope
         l_search_space = dy[min(c, left_found) : max(c, left_found) + 1]
         left_idx = min(c, left_found) + int(np.argmin(l_search_space))
 
+        # keep right value with the highest slope
         r_search_space = dy[min(c, right_found) : max(c, right_found) + 1]
-        right_idx = min(c, right_found) + int(np.argmin(r_search_space))
+        right_idx = min(c, right_found) + int(np.argmax(r_search_space))
 
         edges.append((left_idx, right_idx))
 
     unique_edges = list(dict.fromkeys(tuple(edge) for edge in edges))
-    return [(int(left), int(right)) for left, right in unique_edges]
+    return unique_edges

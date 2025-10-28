@@ -102,11 +102,16 @@ def lowessSmooth(
 
 def _cov_to_weights(
     coverage,
-    cov_conf
+    cov_conf,
+    decay_rate: float = 5.0,
 ):
-    """Input an array of valid coverage. Returns an array of LOWESS weights based on coverage."""
-    coverage = np.asarray(coverage, dtype=int)
+    coverage = np.asarray(coverage, dtype=float)
     if cov_conf <= 0:
         raise ValueError("cov_conf must be greater than 0.")
-    weights = np.minimum(coverage / cov_conf, 1.0)
+    if np.any(coverage < 0):
+        raise ValueError("coverage must be non-negative.")
+    
+    # Exponential decay: high coverage → weight ≈ 1, low coverage → weight → 0
+    weights = 1 - np.exp(-decay_rate * (coverage / cov_conf))
+    weights = np.clip(weights, 0, 1)
     return weights

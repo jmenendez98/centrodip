@@ -48,7 +48,6 @@ def single_chromosome_task(
     )
     data["unfiltered_dip_starts"] = dips["starts"]
     data["unfiltered_dip_ends"] = dips["ends"]
-
     # filter the dips
     final_dips = filterDips(
         dips, dip_idxs, 
@@ -80,16 +79,16 @@ def main() -> None:
 
     smoothing_group = argparser.add_argument_group('Smoothing Options')
     smoothing_group.add_argument(
-        "--cov-conf",
-        type=int,
-        default=10,
-        help="Minimum coverage required to be a confident CpG site. (default: 10)",
-    )
-    smoothing_group.add_argument(
         "--window-size",
         type=int,
-        default=10000,
+        default=50000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
+    )
+    smoothing_group.add_argument(
+        "--cov-conf",
+        type=int,
+        default=1,
+        help="Minimum coverage required to be a confident CpG site. (default: 10)",
     )
 
 
@@ -97,7 +96,7 @@ def main() -> None:
     dip_detect_group.add_argument(
         "--prominence",
         type=float,
-        default=0.10,
+        default=0.25,
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.5)",
     )
     dip_detect_group.add_argument(
@@ -129,13 +128,13 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-z-score",
         type=int,
-        default=1,
+        default=-1,
         help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
     )
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
-        default=250000,
+        default=-1,
         help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 250000)",
     )
 
@@ -215,18 +214,13 @@ def main() -> None:
 
     raw_dips: Dict[str, Dict[str, List[Union[float, int]]]] = {}
 
-    print(results_by_chrom.keys())
-    print(results_by_chrom["chrX"].keys())
-
     # if debug is on, write out the smoothed values
     if args.debug:
         with open(f"{output_prefix}.debug.smooth_frac_mod.bedgraph", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in results_by_chrom.items():
+            for chrom, values in results_by_chrom.items():
                 if not values:
                     continue
-                chrom = region.split(":", 1)[0]
-
                 assert len(values.get("cpg_pos", [])) == len(values.get("lowess_fraction_modified", [])), "Error mismatch size in output data."
                 for i in range(len(values.get("cpg_pos", []))):
                     start = values["cpg_pos"][i]
@@ -237,11 +231,9 @@ def main() -> None:
 
         with open(f"{output_prefix}.debug.smooth_frac_mod_dy.bedgraph", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in results_by_chrom.items():
+            for chrom, values in results_by_chrom.items():
                 if not values:
                     continue
-                chrom = region.split(":", 1)[0]
-
                 assert len(values.get("cpg_pos", [])) == len(values.get("lowess_fraction_modified_dy", [])), "Error mismatch size in output data."
                 for i in range(len(values.get("cpg_pos", []))):
                     start = values["cpg_pos"][i]
@@ -252,10 +244,9 @@ def main() -> None:
 
         with open(f"{output_prefix}.debug.no_filt_dips.bed", "w", encoding="utf-8") as handle:
             lines = []
-            for region, values in results_by_chrom.items():
+            for chrom, values in results_by_chrom.items():
                 if not values:
                     continue
-                chrom = region.split(":", 1)[0]
                 assert len(values.get("unfiltered_dip_starts", [])) == len(values.get("unfiltered_dip_ends", [])), "Mismatched dip starts and ends lengths in debug output."
                 for i in range(len(values.get("unfiltered_dip_starts", []))):
                     start = values["unfiltered_dip_starts"][i]
@@ -267,10 +258,9 @@ def main() -> None:
     # write final dips to output BED file
     with open(f"{output_prefix}.bed", "w", encoding="utf-8") as handle:
         lines = []
-        for region, values in results_by_chrom.items():
+        for chrom, values in results_by_chrom.items():
             if not values:
                 continue
-            chrom = region.split(":", 1)[0]
             assert len(values.get("dip_starts", [])) == len(values.get("dip_ends", [])), "Mismatched dip starts and ends lengths in debug output."
             for i in range(len(values.get("dip_starts", []))):
                 start = values["dip_starts"][i]

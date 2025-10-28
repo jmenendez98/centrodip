@@ -15,9 +15,9 @@ def filterDips(
     dips: DipResults,
     dip_idxs,
     fraction_modified,
-    cluster_distance: int,
     min_size: int,
-    min_zscore: float = 1.0,
+    min_zscore: float,
+    cluster_distance,
 ) -> DipResults:
 
     # size filter
@@ -83,7 +83,7 @@ def filter_by_size(
 
     mask: List[bool] = []
     for s, e in zip(starts, ends):
-        mask.append(abs(int(e) - int(s)) < int(min_size))
+        mask.append(abs(int(e) - int(s)) >= int(min_size))
 
     if all(mask):
         return dips, dip_idxs
@@ -172,7 +172,7 @@ def filter_by_zscore(
 
         # remove dips with z-score smaller (less sig) than min_value_zscore
         z = (outside_mean - inside_mean) / outside_std
-        mask.append(z < min_value_zscore)
+        mask.append(z >= min_value_zscore)
 
     if all(mask):
         return dips, dip_idxs

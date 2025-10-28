@@ -27,10 +27,19 @@ def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
 
 
 def _position_edges(positions: Sequence[float]) -> np.ndarray:
-    if not positions:
+    if positions is None:
         return np.asarray([])
 
-    ordered = np.asarray(sorted(float(pos) for pos in positions))
+    positions_arr = np.asarray(positions, dtype=float).ravel()
+
+    if positions_arr.size == 0:
+        return np.asarray([])
+
+    valid_mask = ~np.isnan(positions_arr)
+    if not np.any(valid_mask):
+        return np.asarray([])
+
+    ordered = np.sort(positions_arr[valid_mask])
     if len(ordered) == 1:
         pos = ordered[0]
         return np.asarray([pos - 0.5, pos + 0.5])
@@ -49,7 +58,13 @@ def _fraction_window_bins(
     region_end: int,
     window_size: float = 1000.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    if not positions or not values:
+    if positions is None or values is None:
+        return np.asarray([]), np.asarray([])
+
+    pos_arr = np.asarray(positions, dtype=float).ravel()
+    val_arr = np.asarray(values, dtype=float).ravel()
+
+    if pos_arr.size == 0 or val_arr.size == 0:
         return np.asarray([]), np.asarray([])
 
     region_min = float(min(region_start, region_end))
@@ -67,9 +82,6 @@ def _fraction_window_bins(
     if edges[0] != region_min:
         edges = np.insert(edges, 0, region_min)
 
-    pos_arr = np.asarray(positions, dtype=float)
-    val_arr = np.asarray(values, dtype=float)
-
     means: List[float] = []
     for left, right in zip(edges[:-1], edges[1:]):
         if right < left:
@@ -82,6 +94,7 @@ def _fraction_window_bins(
             means.append(np.nan)
 
     return edges, np.asarray(means, dtype=float)
+
 
 def _slice_methylation_record(
     record: MethylationRecord,
@@ -156,22 +169,26 @@ def _filter_dips_for_region(
 def _plot_band(
     ax: plt.Axes,
     x,
-    val: str,
+    val,
     y_bottom: float,
     y_top: float,
     norm: Normalize,
+    *,
+    cmap_name: str = "Greys",
 ) -> None:
-    if not x or not val:
+    if x is None or val is None:
         return
 
-    # to arrays
     x_arr = np.asarray(x, dtype=float)
     v_arr = np.asarray(val, dtype=float)
 
-    # length check
+    if x_arr.size == 0 or v_arr.size == 0:
+        return
+
     n = min(x_arr.size, v_arr.size)
     if n == 0:
         return
+
     x_arr = x_arr[:n]
     v_arr = v_arr[:n]
 
@@ -179,8 +196,7 @@ def _plot_band(
     if edges_x.size < 2:
         return  # nothing to draw
 
-    # build a single-row "image": shape (1, n_cells)
-    data = np.ma.masked_invalid(v_arr[np.newaxis, :])
+    data = np.ma.masked_invalid(v_arr[np.newaxis, :n])
     edges_y = np.asarray([y_bottom, y_top], dtype=float)
 
     ax.pcolormesh(
@@ -194,57 +210,55 @@ def _plot_band(
 
 def _plot_fraction_line(
     ax: plt.Axes,
-    record: MethylationRecord,
-    column: str,
-    region_start: int,
-    region_end: int,
+    xpos,
+    val,
     *,
-    window_size: float = 1000.0,
     color: str = "black",
-    linewidth: float = 1,
-    alpha : float = 0.5,
+    linewidth: float = 1.0,
+    alpha: float = 0.5,
 ) -> None:
-    positions, values = _ordered_positions(record, column)
-    if not positions or not values:
+    if xpos is None or val is None:
         return
 
-    y_values = 1.75 + np.asarray(values, dtype=float) / 100.0
+    positions = np.asarray(xpos, dtype=float)
+    values = np.asarray(val, dtype=float)
+
+    if positions.size == 0 or values.size == 0:
+        return
+
+    n = min(positions.size, values.size)
+    if n == 0:
+        return
+
+    positions = positions[:n]
+    values = values[:n]
+
+    y_values = 1.75 + values / 100.0
     ax.plot(positions, y_values, color=color, linewidth=linewidth, alpha=alpha)
-
-
-def _plot_regions(ax: plt.Axes, regions: Iterable[Tuple[int, int]]) -> None:
-    for start, end in regions:
-        start = int(start)
-        end = int(end)
-        left, right = _normalise_interval(start, end)
-        rect = Rectangle(
-            (left, 0),
-            right - left,
-            1,
-            facecolor=(153/255,0/255,0/255),
-            alpha=1,
-            edgecolor="none",
-        )
-        ax.add_patch(rect)
 
 
 def _plot_dips(
     ax: plt.Axes,
-    dips: DipRecord,
-    *,
+    starts=None,
+    ends=None,
     y_bottom: float = 3.0,
     height: float = 0.5,
     color: str = "black",
     alpha: float = 0.7,
     zorder: float | None = None,
 ) -> None:
-    starts = dips.get("starts", []) if dips else []
-    ends = dips.get("ends", []) if dips else []
+    if starts is None or ends is None:
+        return
 
-    for start, end in zip(starts, ends):
-        start = int(start)
-        end = int(end)
-        left, right = _normalise_interval(start, end)
+    starts_arr = np.asarray(starts, dtype=float)
+    ends_arr = np.asarray(ends, dtype=float)
+
+    n = min(starts_arr.size, ends_arr.size)
+    if n == 0:
+        return
+
+    for start, end in zip(starts_arr[:n], ends_arr[:n]):
+        left, right = _normalise_interval(int(start), int(end))
         rect = Rectangle(
             (left, y_bottom),
             right - left,
@@ -314,6 +328,10 @@ def centrodipSummaryPlot(
         frac_mod = chrom_results.get("fraction_modified", [])
         lowess_frac_mod = chrom_results.get("lowess_fraction_modified", [])
 
+        if cpg_pos is None or len(cpg_pos) == 0:
+            ax.set_axis_off()
+            continue
+
         x_min = min(cpg_pos)
         x_max = max(cpg_pos)
         if x_min == x_max:
@@ -351,8 +369,8 @@ def centrodipSummaryPlot(
         )
 
         # plot unfiltered dips
-        unfiltered_dip_starts = chrom_results.get("unfiltered_dip_starts", []) if coords else []
-        unfiltered_dip_ends = chrom_results.get("unfiltered_dip_ends", []) if coords else []
+        unfiltered_dip_starts = chrom_results.get("unfiltered_dip_starts", [])
+        unfiltered_dip_ends = chrom_results.get("unfiltered_dip_ends", [])
         _plot_dips(
             ax=ax,
             starts=unfiltered_dip_starts,
@@ -362,11 +380,11 @@ def centrodipSummaryPlot(
             color="tab:blue",
             alpha=0.4,
             zorder=3,
-            )
+        )
 
         # plot final dips
-        dip_starts = chrom_results.get("dip_starts", []) if coords else []
-        dip_ends = chrom_results.get("dip_ends", []) if coords else []
+        dip_starts = chrom_results.get("dip_starts", [])
+        dip_ends = chrom_results.get("dip_ends", [])
         _plot_dips(
             ax=ax,
             starts=dip_starts,
@@ -377,7 +395,6 @@ def centrodipSummaryPlot(
             alpha=0.7,
             zorder=2,
         )
-
 
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(0, 4.2)
