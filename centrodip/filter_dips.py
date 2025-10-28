@@ -24,57 +24,57 @@ def _filter_record(record: DipRecord, mask: Sequence[bool]) -> DipRecord:
 
 
 def filter_by_size(
-    record: DipRecord, 
+    dips: DipRecord, 
     min_size: int
 ) -> DipRecord:
     """Simple filter based on an entry size"""
     if min_size <= 0:
-        return record
+        return dips
 
-    starts = list(record.get("starts", []))
-    ends = list(record.get("ends", []))
+    starts = list(dips.get("starts", []))
+    ends = list(dips.get("ends", []))
+
     if not starts or not ends:
-        return record
+        return dips
 
     mask: List[bool] = []
     for start, end in zip(starts, ends):
-        start_i = int(start)
-        end_i = int(end)
-        mask.append(abs(end_i - start_i) >= min_size)
+        mask.append(abs(end - start) < min_size)
 
     if all(mask):
-        return record
-    return _filter_record(record, mask)
+        return dips
+
+    return _filter_record(dips, mask)
 
 def filter_by_value(
-    record: DipRecord, 
+    dips: DipRecord, 
     min_value_zscore: float
 ) -> DipRecord:
     """Filter entry based on z-scoring threshold of CpG values within it"""
 
     # If the threshold is non-positive, do nothing (no filtering).
     if min_value_zscore <= 0:
-        return record
+        return dips
 
-    starts = list(record.get("starts", []))
-    ends = list(record.get("ends", []))
+    starts = list(dips.get("starts", []))
+    ends = list(dips.get("ends", []))
     if not starts or not ends:
-        return record
+        return dips
 
     # fetch CpG positions within entry
-    positions = record.get("positions") or record.get("position")
+    positions = dips.get("positions") or dips.get("position")
     if positions is None:
-        positions = record.get("cpg_sites")
+        positions = dips.get("cpg_sites")
 
     # fetch CpG frac mod values within entry
-    values = (record.get("lowess_fraction_modified"))
+    values = (dips.get("lowess_fraction_modified"))
     if positions is None or values is None:
-        return record
+        return dips
 
     positions_list = list(positions)
     values_list = list(values)
     if len(positions_list) != len(values_list) or not positions_list:
-        return record
+        return dips
 
     points = [(int(pos), float(val)) for pos, val in zip(positions_list, values_list)]
 
@@ -101,8 +101,9 @@ def filter_by_value(
         mask.append(z_score >= min_value_zscore)
 
     if all(mask):
-        return record
-    return _filter_record(record, mask)
+        return dips
+
+    return _filter_record(dips, mask)
 
 def filter_by_cluster(record: DipRecord, cluster_distance: int) -> DipRecord:
     
@@ -160,18 +161,34 @@ def filter_by_cluster(record: DipRecord, cluster_distance: int) -> DipRecord:
 
 
 def filterDips(
-    dip_dict: DipResults,
+    dips: DipResults,
+    dip_idxs,
+    fraction_modified,
     cluster_distance: int,
     min_size: int,
     min_zscore: float = 1.0,
 ) -> DipResults:
-    filtered: DipResults = {}
-    for region, record in (dip_dict or {}).items():
-        current = record
-        current = filter_by_size(record, min_size) # size filter
-        current = filter_by_value(current, min_zscore) # zscore filter
-        current = filter_by_cluster(current, cluster_distance) # cluster filter
-        filtered[region] = current
+
+    # size filter
+    filtered, filtered_idxs = filter_by_size(
+        dips, min_size
+    ) 
+    # print(f"filter1: {filtered}")
+
+    # zscore filter
+    filtered, filtered_idxs = filter_by_value(
+        filtered, filtered_idxs, 
+        fraction_modified, 
+        min_zscore
+    ) 
+    # print(f"filter2: {filtered}")
+
+    # cluster filter
+    filtered, filtered_idxs = filter_by_cluster(
+        filtered, cluster_distance
+    ) 
+    # print(f"filter3: {filtered}")
+
     return filtered
 
 

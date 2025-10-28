@@ -1,6 +1,6 @@
 import argparse
 import os
-3
+
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Union
@@ -41,7 +41,7 @@ def single_chromosome_task(
     data["lowess_fraction_modified_dy"] = np.array(derivative, dtype=float)
 
     # find the dip positons
-    dips = detectDips(
+    dips, dip_idxs = detectDips(
         data,
         prominence=prominence, height=height, enrichment=enrichment, broadness=broadness,
         debug=debug,
@@ -49,11 +49,14 @@ def single_chromosome_task(
 
     # filter the dips
     final_dips = filterDips(
-        dips,
+        dips, dip_idxs, fractions,
         min_size=min_size, min_zscore=min_zscore, cluster_distance=cluster_distance
     )
 
-    print(dips)
+    print(chrom)
+    #print(dips)
+    #print(final_dips)
+    #print()
 
     # return chrom, result
 
@@ -126,7 +129,7 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-z-score",
         type=int,
-        default=1.5,
+        default=1,
         help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
     )
     dip_filter_group.add_argument(
@@ -198,7 +201,7 @@ def main() -> None:
                 args.window_size, args.cov_conf,                        # smoothing arguments
                 args.prominence, args.height, args.broadness,           # dip detection args
                 args.enrichment,
-
+                args.min_size, args.min_z_score, args.cluster_distance,
                 args.debug,
             )
             futures.append(fut)

@@ -40,7 +40,13 @@ def detectDips(
         bounding_threshold, dip_centers
     )
 
-    return [(positions[dli], positions[dri]) for dli, dri in dip_edge_idxs]
+    # populate the dips dict data
+    dips = {"starts": [], "ends": []}
+    for dli, dri in dip_edge_idxs:
+        dips["starts"].append(positions[dli])
+        dips["ends"].append(positions[dli])
+
+    return dips, dip_edge_idxs
 
 
 def find_dip_centers(
@@ -124,4 +130,4 @@ def find_edge_idxs(
 
             edges.append((l_idx, r_idx))
 
-    return np.array(edges)
+    return list(dict.fromkeys(map(tuple, edges)))
