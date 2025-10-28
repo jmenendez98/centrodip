@@ -110,7 +110,7 @@ def main() -> None:
     dip_detect_group.add_argument(
         "--broadness",
         type=float,
-        default=50,
+        default=25,
         help="Broadness of dips called. Higher values make broader entries. (default: 50)",
     )
     dip_detect_group.add_argument(
@@ -130,7 +130,7 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--min-z-score",
         type=int,
-        default=-1,
+        default=1,
         help="Minimum difference in Z-score that an entry must be from the rest of the data to be kept. (default: 1)",
     )
     dip_filter_group.add_argument(

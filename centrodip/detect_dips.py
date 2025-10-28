@@ -37,7 +37,6 @@ def detectDips(
 
     # find the dip edge indices
     bounding_threshold = np.percentile(smoothed, q=broadness)
-    print(broadness, bounding_threshold)
     dip_edge_idxs = find_edge_idxs(
         smoothed, smoothed_dy,
         bounding_threshold, dip_centers

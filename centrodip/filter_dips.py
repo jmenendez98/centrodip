@@ -150,7 +150,6 @@ def filter_by_zscore(
 
         # remove dips with z-score smaller (less sig) than min_value_zscore
         z = (outside_mean - inside_mean) / outside_std
-        print(z)
         mask.append(z >= min_value_zscore)
 
     if all(mask):
