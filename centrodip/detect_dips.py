@@ -17,12 +17,11 @@ DipIndices = List[Tuple[int, int]]
 
 def detectDips(
     data: Dict[str, MethylationRecord],
-    prominence: float = 0.25,
-    height: float = 10,
-    enrichment: bool = False,
-    broadness: float = 50,
-    threads: int = 1,
-    debug: bool = False,
+    prominence: float,
+    height: float,
+    enrichment: bool,
+    broadness: float,
+    debug: bool,
 ) -> DipResults:
     """Detect dips across all chromosomes/regions in the provided data."""
 
@@ -37,17 +36,40 @@ def detectDips(
     )
 
     # find the dip edge indices
-    bounding_threshold = np.percentile(smoothed, broadness)
+    bounding_threshold = np.percentile(smoothed, q=broadness)
+    print(broadness, bounding_threshold)
     dip_edge_idxs = find_edge_idxs(
         smoothed, smoothed_dy,
         bounding_threshold, dip_centers
     )
 
-    # populate the dips dict data
-    dips = {"starts": [], "ends": []}
-    for dli, dri in dip_edge_idxs:
-        dips["starts"].append(positions[dli])
-        dips["ends"].append(positions[dri])
+    sorted_edges = sorted(dip_edge_idxs, key=lambda x: x[0])
+    filtered = []
+
+    for (dli, dri) in sorted_edges:
+        # skip invalid or reversed intervals
+        if dri <= dli:
+            continue
+        if not filtered:
+            filtered.append((dli, dri))
+            continue
+        prev_l, prev_r = filtered[-1]
+        # overlap check
+        if dli <= prev_r:
+            prev_len = prev_r - prev_l
+            curr_len = dri - dli
+            # keep the larger dip
+            if curr_len > prev_len:
+                filtered[-1] = (dli, dri)
+            # else keep the previous one (do nothing)
+        else:
+            filtered.append((dli, dri))
+
+    # finally populate positions
+    dips = {"starts": [], "ends": []}    
+    for l, r in filtered:
+        dips["starts"].append(positions[l])
+        dips["ends"].append(positions[r])
 
     return dips, dip_edge_idxs
 

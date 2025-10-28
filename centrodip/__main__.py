@@ -43,7 +43,10 @@ def single_chromosome_task(
     # find the dip positons
     dips, dip_idxs = detectDips(
         data,
-        prominence=prominence, height=height, enrichment=enrichment, broadness=broadness,
+        prominence=prominence, 
+        height=height, 
+        enrichment=enrichment, 
+        broadness=broadness,
         debug=debug,
     )
     data["unfiltered_dip_starts"] = dips["starts"]
@@ -51,7 +54,7 @@ def single_chromosome_task(
     # filter the dips
     final_dips = filterDips(
         dips, dip_idxs, 
-        fraction_modified,
+        smoothed,
         min_size=min_size, min_zscore=min_zscore, cluster_distance=cluster_distance
     )
     data["dip_starts"] = final_dips["starts"]
@@ -81,7 +84,7 @@ def main() -> None:
     smoothing_group.add_argument(
         "--window-size",
         type=int,
-        default=50000,
+        default=10000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
     smoothing_group.add_argument(
@@ -90,7 +93,6 @@ def main() -> None:
         default=1,
         help="Minimum coverage required to be a confident CpG site. (default: 10)",
     )
-
 
     dip_detect_group = argparser.add_argument_group('Detection Options')
     dip_detect_group.add_argument(
@@ -109,7 +111,7 @@ def main() -> None:
         "--broadness",
         type=float,
         default=50,
-        help="Broadness of dips called. Higher values make broader entries. (default: 75)",
+        help="Broadness of dips called. Higher values make broader entries. (default: 50)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -134,7 +136,7 @@ def main() -> None:
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
-        default=-1,
+        default=250000,
         help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 250000)",
     )
 
@@ -196,12 +198,18 @@ def main() -> None:
 
             fut = ex.submit(
                 single_chromosome_task,                                 # parallelized task name
-                chrom, methylation_data[chrom],                         # data
-                args.window_size, args.cov_conf,                        # smoothing arguments
-                args.prominence, args.height, args.broadness,           # dip detection args
-                args.enrichment,
-                args.min_size, args.min_z_score, args.cluster_distance, # dip filtering args
-                args.debug,
+                chrom=chrom,                                            # data
+                data=methylation_data[chrom],                         
+                window_size=args.window_size,                           # smoothing arguments
+                cov_conf=args.cov_conf,                        
+                prominence=args.prominence,                             # dip detection args
+                height=args.height, 
+                broadness=args.broadness,           
+                enrichment=args.enrichment,
+                min_size=args.min_size,                                 # dip filtering args
+                min_zscore=args.min_z_score, 
+                cluster_distance=args.cluster_distance, 
+                debug=args.debug,
             )
             futures.append(fut)
 

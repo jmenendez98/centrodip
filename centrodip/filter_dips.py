@@ -132,46 +132,25 @@ def filter_by_zscore(
             l, r = r, l
 
         inside = values[l:r + 1]
-        # outside = all points before l and after r
-        if l == 0 and r == n - 1:
-            outside = np.array([], dtype=float)
-        elif l == 0:
-            outside = values[r + 1:]
-        elif r == n - 1:
-            outside = values[:l]
-        else:
-            # concatenate without copying huge arrays unnecessarily
-            left = values[:l]
-            right = values[r + 1:]
-            # Avoid making a big copy when both sides are large:
-            outside = np.concatenate((left, right)) if left.size and right.size else (left if left.size else right)
+        inside_mean = float(np.mean(inside))
+
+        outside = np.concatenate([values[0:l+1], values[r:len(values)]])
+        outside_mean = np.mean(outside)
+        outside_std = np.std(outside)
 
         if inside.size == 0:
             # if we can't measure inside, conservatively keep
             mask.append(True)
             continue
 
-        if outside.size == 0:
-            # if there's no outside, fall back to global stats (if meaningful)
-            if global_std <= 1e-9:
-                mask.append(False)  # cannot establish contrast; drop
-                continue
-            inside_mean = float(np.mean(inside))
-            z = (global_mean - inside_mean) / global_std
-            mask.append(z >= min_value_zscore)
-            continue
-
-        inside_mean = float(np.mean(inside))
-        outside_mean = float(np.mean(outside))
-        outside_std = float(np.std(outside))
-
-        if outside_std <= 1e-9:
+        if global_std <= 1e-9:
             # if outside is nearly constant, require strictly lower inside mean
-            mask.append(inside_mean + 1e-9 < outside_mean)
+            mask.append(inside_mean + 1e-9 < global_mean)
             continue
 
         # remove dips with z-score smaller (less sig) than min_value_zscore
         z = (outside_mean - inside_mean) / outside_std
+        print(z)
         mask.append(z >= min_value_zscore)
 
     if all(mask):
