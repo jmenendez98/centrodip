@@ -34,6 +34,7 @@ class DataHandler:
 
 
     def _assert_bed_sorted(
+        self,
         bed_path: Path,
         chrom_col: int = 0,
         start_col: int = 1,
@@ -172,7 +173,7 @@ class DataHandler:
                 if not line.strip():
                     continue
                 cols = line.rstrip("\n").split("\t")
-                if len(cols) == 18:
+                if len(cols) != 18:
                     raise TypeError(
                         f"[Methylation] Insufficient columns at line {line_no} in {mpath}. Expected 18."
                     )

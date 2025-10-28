@@ -1,44 +1,44 @@
-import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
 import argparse
-from typing import Dict, Iterable, List
+import os
+3
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from types import SimpleNamespace
+from typing import Dict, Iterable, List, Union
+
+import numpy as np
 
 from .load_data import DataHandler
-from .lowess_smooth import lowessSmooth
-from .detect_dips import detectDips
+from .lowess_smooth import lowess_smooth
 from .filter_dips import filterDips
 from .summary_plot import centrodip_summary_plot
 
 
 def single_chromosome_task(
-    chrom, data,
-    window_size, 
-    prominence, height, broadness, enrichment,
-
+    chrom: str,
+    data: Dict[str, List[Union[float, int]]],
+    window_size: int, cov_conf: float,
 ):
-    # first smooth the data with lowess_smooth
-    # --- LOWESS tranform data ---
-    data["lowess_fraction_modified"], data["lowess_fraction_modified_dy"] = lowess_smooth(
-        y=data["fraction_modified"],
-        x=data["position"],
-        cov=data["valid_coverage"],
-        window_bp=window_size
-    ) 
+    if len(positions) != len(fractions):
+        raise ValueError(
+            f"Chromosome {chrom}: mismatch between positions ({len(positions)}) and fraction_modified ({len(fractions)})."
+        )
 
-    # then with smoothed data call dips...
-    # --- detect dips ---
-    raw_dips = detectDips(
-        methylation_data=input_data.methylation_dict,
-        regions_data=input_data.region_dict,
-        prominence=args.prominence,
-        height=args.height,
-        broadness=args.broadness,
-        enrichment=args.enrichment,
-        threads=args.threads,
-        debug=args.debug,
+    positions = data.get("position", [])
+    fractions = data.get("fraction_modified", [])
+    coverage = data.get("valid_coverage", [])
+
+    # calculate smoothing + dy, add them to data dict
+    smoothed, derivative = lowess_smooth(
+        y=fractions, x=positions, c=coverage,
+        window_bp=window_size, cov_conf=cov_conf,
     )
+    data["lowess_fraction_modified"] = smoothed.tolist()
+    data["lowess_fraction_modified_dy"] = derivative.tolist()
 
+    # 
+
+
+    return chrom, result
 
 
 def main() -> None:
@@ -57,20 +57,23 @@ def main() -> None:
         default="m",
         help='Modification code to filter bedMethyl file. Selects rows with this as fourth column value. (default: "m")',
     )
-    parsing_group.add_argument(
+
+    smoothing_group = argparser.add_argument_group('Smoothing Options')
+    smoothing_group.add_argument(
         "--cov-conf",
         type=int,
         default=10,
         help="Minimum coverage required to be a confident CpG site. (default: 10)",
     )
-
-    dip_detect_group = argparser.add_argument_group('Detection Options')
-    parsing_group.add_argument(
+    smoothing_group.add_argument(
         "--window-size",
         type=int,
         default=10000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
     )
+
+
+    dip_detect_group = argparser.add_argument_group('Detection Options')
     dip_detect_group.add_argument(
         "--prominence",
         type=float,
@@ -159,6 +162,8 @@ def main() -> None:
         debug=args.debug,
     )
 
+    results_by_chrom: Dict[str, Dict[str, List[Union[float, int]]]] = {}
+
     # add a futures parallelized functionized thing that can take th yielded input from running
     # data_handler.load_data()...
     with ProcessPoolExecutor(max_workers=args.threads) as ex:
@@ -166,12 +171,15 @@ def main() -> None:
 
         # stream the methylation BED; each yield is a single-chrom dict: {"chrX": methylation_data}
         for one_chrom_dict in data_handler.load_data():
-            (chrom, methylation_data), = one_chrom_dict.items()   # unpack single item
+            (chrom, methylation_data) = one_chrom_dict   # unpack single item
+
+            # print(chrom, methylation_data[chrom].keys())
 
             fut = ex.submit(
-                single_chromosome_task, 
-                chrom, methylation_data, 
-                args.window_size
+                single_chromosome_task,             # parallelized task name
+                chrom, methylation_data[chrom],     # data
+                args.window_size, args.cov_conf,    # smoothing arguments
+
             )
             futures.append(fut)
 
@@ -182,6 +190,7 @@ def main() -> None:
             if args.debug:
                 print(f"[DEBUG] Completed {chrom}: {result}")
 
+    raw_dips: Dict[str, Dict[str, List[Union[float, int]]]] = {}
 
     # if debug is on, write out the smoothed values
     if args.debug:

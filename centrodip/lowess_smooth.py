@@ -10,7 +10,22 @@ import numpy as np
 import os
 
 
-def lowess_smooth(y, x, window_bp, point_weights: np.ndarray | None = None):
+def _cov_to_weights(
+    coverage,
+    cov_conf
+):
+    """Input an array of valid coverage. Returns an array of LOWESS weights based on coverage."""
+    coverage = np.asarray(coverage, dtype=int)
+    if cov_conf <= 0:
+        raise ValueError("cov_conf must be greater than 0.")
+    weights = np.minimum(coverage / cov_conf, 1.0)
+    return weights
+
+
+def lowess_smooth(
+    y, x, c, 
+    window_bp, cov_conf
+):
     """
     LOWESS with tricube distance kernel.
     If point_weights is provided (length n), they are multiplied into the local
@@ -18,6 +33,7 @@ def lowess_smooth(y, x, window_bp, point_weights: np.ndarray | None = None):
     """
     y = np.asarray(y, float)
     x = np.asarray(x, float)
+    point_weights = _cov_to_weights(c, cov_conf)
     n = len(y)
     if n == 0:
         return np.array([], float), np.array([], float)
@@ -94,65 +110,3 @@ def lowess_smooth(y, x, window_bp, point_weights: np.ndarray | None = None):
         dydx[-1] = dydx[-2]
 
     return ys, dydx
-
-
-def _smooth_region_task(args: Tuple[List[int], List[float], int, List[float]]) -> List[float]:
-    """
-    Worker function for parallel smoothing.
-    Args: (positions, fraction_modified, window_bp, point_weights)
-    Returns: (smoothed fraction list, smoothed derivative list)
-    """
-    positions, fractions, window_bp, point_weights = args
-    if not positions:
-        return [], []
-
-    x = np.asarray(positions, dtype=float)
-    y = np.asarray(fractions, dtype=float)
-    pw = np.asarray(point_weights, dtype=float)
-
-    y_sm, dy_sm = lowess_smooth(y, x, window_bp, point_weights=pw)
-    return y_sm.tolist(), dy_sm.tolist()
-
-'''
-def _add_lowess_parallel(self) -> None:
-    """
-    Compute LOWESS-smoothed methylation per region in parallel and
-    store it under key 'lowess_fraction_modified' in self.methylation_dict[region].
-    """
-    tasks = []
-    keys = []
-    for key, entry in self.methylation_dict.items():
-        if len(entry["position"]) == 0:
-            entry["lowess_fraction_modified"] = []
-            entry["lowess_fraction_modified_dy"] = []
-            continue
-
-        # Build per-point weights from coverage:
-        cov = np.asarray(entry.get("valid_coverage", []), dtype=float)
-        if cov.size == 0:
-            # No per-CpG coverage available → uniform weights
-            pw = np.ones_like(cov if cov.size else np.asarray(entry["position"], float), dtype=float)
-        else:
-            # w = min(cov/10, 1), clipped to [0, 1]
-            pw = np.clip(cov / 10.0, 0.0, 1.0)
-
-        keys.append(key)
-        tasks.append((
-            entry["position"],
-            entry["fraction_modified"],
-            self.smooth_window_bp,
-            pw.tolist(),
-        ))
-
-    if not tasks:
-        return
-
-    max_workers = self.threads or os.cpu_count() or 1
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as ex:
-        fut_to_key = {ex.submit(_smooth_region_task, task): key for key, task in zip(keys, tasks)}
-        for fut in concurrent.futures.as_completed(fut_to_key):
-            key = fut_to_key[fut]
-            y_sm, dy_sm = fut.result()
-            self.methylation_dict[key]["lowess_fraction_modified"] = y_sm
-            self.methylation_dict[key]["lowess_fraction_modified_dy"] = dy_sm
-'''
