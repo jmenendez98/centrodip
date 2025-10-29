@@ -1,6 +1,9 @@
+from bisect import bisect_left, bisect_right
+
 import pytest
 
-from centrodip.detect_dips import DipDetector
+from centrodip.detect_dips import detectDips
+from centrodip.lowess_smooth import lowessSmooth
 
 from tests.conftest import EXPECTED_CHROMS
 
@@ -17,16 +20,40 @@ class TestMatrix:
             handler = data_handler_factory(
                 methylation_path=dataset_paths["bedmethyl"],
                 regions_path=dataset_paths["regions"],
-                threads=1,
             )
 
-            for region_name, region_values in handler.methylation_dict.items():
+            regions = handler.read_regions_bed(handler.regions_path)
+            region_records = {}
+
+            for chrom, payload in handler.load_data():
+                chrom_payload = payload.get(chrom, {})
+                positions = chrom_payload.get("cpg_pos", [])
+                fractions = chrom_payload.get("fraction_modified", [])
+                coverage = chrom_payload.get("valid_coverage", [])
+
+                chrom_regions = regions.get(chrom)
+                if not chrom_regions:
+                    continue
+
+                starts = chrom_regions.get("starts", [])
+                ends = chrom_regions.get("ends", [])
+
+                for start, end in zip(starts, ends):
+                    left = bisect_right(positions, start)
+                    right = bisect_left(positions, end)
+                    region_name = f"{chrom}:{start}-{end}"
+                    region_records[region_name] = {
+                        "position": positions[left:right],
+                        "fraction_modified": fractions[left:right],
+                        "valid_coverage": coverage[left:right],
+                    }
+
+            for region_name, region_values in region_records.items():
                 if len(region_values["position"]) >= 51:
                     selected_dataset = (
                         dataset_key,
                         region_name,
                         region_values,
-                        handler,
                     )
                     break
 
@@ -36,25 +63,33 @@ class TestMatrix:
         if not selected_dataset:
             pytest.skip("No downloaded region contains enough CpGs for smoothing.")
 
-        dataset_key, region_name, region_values, handler = selected_dataset
+        dataset_key, region_name, region_values = selected_dataset
         expected_chrom = EXPECTED_CHROMS[dataset_key]
         assert region_name.split(":", 1)[0] == expected_chrom
 
-        detector = DipDetector(
-            methylation_data=handler.methylation_dict,
-            regions_data=handler.region_dict,
+        smoothed, derivative = lowessSmooth(
+            y=region_values["fraction_modified"],
+            x=region_values["position"],
+            c=region_values["valid_coverage"],
+            window_bp=10000,
+            cov_conf=1.0,
+        )
+
+        assert len(smoothed) == len(region_values["position"])
+        assert len(derivative) == len(region_values["position"])
+
+        dips, dip_edge_indices = detectDips(
+            {
+                "cpg_pos": region_values["position"],
+                "lowess_fraction_modified": smoothed,
+                "lowess_fraction_modified_dy": derivative,
+            },
             prominence=0.667,
             height=10,
-            broadness=10,
             enrichment=False,
-            threads=1,
+            broadness=10,
+            debug=False,
         )
-        dip_results = detector.detect_all()
 
-        assert region_name in dip_results
-        methylation_per_region = handler.methylation_dict
-        assert "lowess_fraction_modified" in methylation_per_region[region_name]
-        assert "lowess_fraction_modified_dy" in methylation_per_region[region_name]
-        assert len(methylation_per_region[region_name]["lowess_fraction_modified"]) == len(
-            region_values["fraction_modified"]
-        )
+        assert set(dips.keys()) == {"starts", "ends"}
+        assert isinstance(dip_edge_indices, list)

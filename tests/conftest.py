@@ -60,9 +60,6 @@ def bed_parser(test_data_dir: Path) -> DataHandler:
         regions_path=test_data_dir / "censat_test.bed",
         methylation_path=test_data_dir / "bedmethyl_test.bed",
         mod_code="m",
-        bedgraph=False,
-        smooth_window_bp=10000,
-        threads=1,
     )
 
 @pytest.fixture()
@@ -72,10 +69,6 @@ def data_handler_factory() -> Callable[..., DataHandler]:
             regions_path=regions_path,
             methylation_path=methylation_path,
             mod_code="m",
-            bedgraph=False,
-            smooth_window_bp=overrides.get("smooth_window_bp", 10000),
-            threads=overrides.get("threads", 1),
-            debug=overrides.get("debug", False),
         )
 
     return factory

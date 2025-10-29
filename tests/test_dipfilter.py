@@ -12,10 +12,11 @@ class TestDipFilter:
             }
         }
 
-        filtered = {
-            region: filter_by_size(record, min_size=50)
-            for region, record in dip_results.items()
-        }
+        filtered = {}
+        for region, record in dip_results.items():
+            filtered_record, _ = filter_by_size(record, None, min_size=50)
+            filtered[region] = filtered_record
+
         region = filtered["chr1:0-500"]
 
         assert region["starts"] == [100, 200]
@@ -29,10 +30,11 @@ class TestDipFilter:
             }
         }
 
-        filtered = {
-            region: filter_by_cluster(record, cluster_distance=150)
-            for region, record in dip_results.items()
-        }
+        filtered = {}
+        for region, record in dip_results.items():
+            filtered_record, _ = filter_by_cluster(record, None, cluster_distance=150)
+            filtered[region] = filtered_record
+
         region = filtered["chr2:0-2000"]
 
         assert region["starts"] == [1000, 1100]
@@ -48,13 +50,13 @@ class TestDipFilter:
         }
 
         filtered = filterDips(
-            dip_dict=dip_results,
-            cluster_distance=cluster_distance,
+            dips=dip_results["chr3:0-300"],
+            dip_idxs=None,
+            fraction_modified=None,
             min_size=0,
             min_zscore=0,
+            cluster_distance=cluster_distance,
         )
-        region = filtered["chr3:0-300"]
-
         # Each interval forms its own cluster when gap is 0, so keep the first one.
-        assert region["starts"] == [0]
-        assert region["ends"] == [10]
+        assert filtered["starts"] == [0]
+        assert filtered["ends"] == [10]
