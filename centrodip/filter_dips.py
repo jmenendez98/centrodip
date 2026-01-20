@@ -6,11 +6,6 @@ from typing import Dict, Mapping, Sequence, List, Tuple
 import numpy as np
 
 
-DipRecord = Dict[str, list[int]]
-DipResults = Dict[str, DipRecord]
-IdxPairs = List[Tuple[int, int]]
-
-
 def filterDips(
     dips: DipResults,
     dip_idxs,
@@ -18,7 +13,7 @@ def filterDips(
     min_size: int,
     min_zscore: float,
     cluster_distance,
-) -> DipResults:
+) -> BedTable:
 
     # size filter
     filtered, filtered_idxs = filter_by_size(

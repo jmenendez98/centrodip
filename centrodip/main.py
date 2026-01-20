@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+import argparse
+
+from pathlib import Path
+from bedtable import BedTable
+
+import bedmethyl_smooth as bms
+import detect_dips as dd
+
+def summarize_table(bt: BedTable, n_preview: int = 5) -> None:
+    print("=" * 60)
+    print(f"Source file      : {bt.source_path}")
+    print(f"Inferred kind    : {bt.inferred_kind}")      # bed / bedgraph
+    print(f"Inferred #cols   : {bt.inferred_ncols}")
+    print(f"# records        : {len(bt)}")
+    print(f"# comments       : {len(bt.comments)}")
+    print(f"# track lines    : {len(bt.track_lines)}")
+    print(f"# browser lines  : {len(bt.browser_lines)}")
+
+    if len(bt) == 0:
+        print("No records found.")
+        return
+
+    # Inspect first record to understand schema
+    r0 = bt[0]
+    print("\nFirst record:")
+    print(f"  chrom   : {r0.chrom}")
+    print(f"  start   : {r0.start}")
+    print(f"  end     : {r0.end}")
+    print(f"  length  : {r0.length}")
+    print(f"  name    : {r0.name}")
+    print(f"  score   : {r0.score}")
+    print(f"  strand  : {r0.strand}")
+    print(f"  extras  : {r0.extras}")
+
+    print(f"\nPreviewing first {n_preview} records:")
+    for i, r in enumerate(bt[:n_preview]):
+        print(
+            f"{i:02d}  {r.chrom}:{r.start}-{r.end}  "
+            f"name={r.name} score={r.score} strand={r.strand} extras={r.extras}"
+        )
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Inspect BED / bedGraph files using BedTable"
+    )
+
+    # take in positional - file paths
+    parser.add_argument("bedMethyl", type=str, help="Path to the bedMethyl file")
+    parser.add_argument("regions", type=str, help="Path to BED file of regions to search for dips")
+    parser.add_argument("output", type=str, help="Path to the output BED file")
+
+    parsing_group = parser.add_argument_group('Input Options')
+    parsing_group.add_argument(
+        "--mod-code",
+        type=str,
+        default="m",
+        help='Modification code to filter bedMethyl file. Selects rows with this as fourth column value. (default: "m")',
+    )
+
+    smoothing_group = parser.add_argument_group('Smoothing Options')
+    smoothing_group.add_argument(
+        "--window-size",
+        type=int,
+        default=10000,
+        help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
+    )
+    smoothing_group.add_argument(
+        "--cov-conf",
+        type=int,
+        default=1,
+        help="Minimum coverage required to be a confident CpG site. (default: 10)",
+    )
+
+    dip_detect_group = parser.add_argument_group('Detection Options')
+    dip_detect_group.add_argument(
+        "--prominence",
+        type=float,
+        default=0.25,
+        help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.25)",
+    )
+    dip_detect_group.add_argument(
+        "--height",
+        type=float,
+        default=0.1,
+        help="Height for dip detection. Must be a float between 0 and 1. Lower values filter more dips. (default: 0.1)",
+    )
+    dip_detect_group.add_argument(
+        "--broadness",
+        type=float,
+        default=0.5,
+        help="Broadness of dips called.  Must be a float between 0 and 1. Higher values make broader entries. (default: 0.5)",
+    )
+    dip_detect_group.add_argument(
+        "--enrichment",
+        action="store_true",
+        default=False,
+        help="Find regions enriched (rather than depleted) for methylation.",
+    )
+
+    output_group = parser.add_argument_group('Output Options')
+    output_group.add_argument(
+        "--label",
+        type=str,
+        default="CDR",
+        help='Label to use for regions in BED output. (default: "CDR")',
+    )
+    output_group.add_argument(
+      "--color",
+        type=str,
+        default="50,50,255",
+        help='Color of predicted dips. (default: "50,50,255")',
+    )
+
+    other_arguments_group = parser.add_argument_group('Other Options')
+    other_arguments_group.add_argument(
+        "--threads",
+        type=int,
+        default=4,
+        help="Number of worker processes. (default: 4)",
+    )
+    other_arguments_group.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Dumps smoothed methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
+    )
+    other_arguments_group.add_argument(
+        "--plot",
+        action="store_true",
+        default=False,
+        help="Create summary plot of the results. Written to <output_prefix>.summary.png (default: False)",
+    )
+
+    args = parser.parse_args()
+
+    # -------------------------
+    # Load files
+    # -------------------------
+    bedMethyl = BedTable.from_path(args.bedMethyl)
+    regions = BedTable.from_path(args.regions)
+
+    # -------------------------
+    # Subset bedMethyl to overlap w/ regions
+    # -------------------------
+    overlapping_records = []
+    regions_by_chrom = regions.groupby_chrom()
+
+    for r in bedMethyl:
+        chrom_regions = regions_by_chrom.get(r.chrom)
+        if chrom_regions is None:
+            continue
+
+        # If this bedMethyl record overlaps ANY region, keep it
+        for reg in chrom_regions:
+            if r.overlaps(reg.chrom, reg.start, reg.end):
+                overlapping_records.append(r)
+                break
+
+    bedMethyl_in_region = BedTable(
+        overlapping_records,
+        inferred_kind=bedMethyl.inferred_kind,
+    )
+
+    lowess_records = []
+    dip_records = []
+
+    for r in bedMethyl_in_region.groupby_chrom():
+        # -------------------------
+        # Smooth bedMethyl
+        # -------------------------
+        bedMethyl_LOWESS = bms.bedMethyl_LOWESS(
+            bedMethyl_in_region,
+            window_bp = args.window_size,
+            cov_conf = args.cov_conf,
+            y_col_1based = 11,
+            cov_col_1based = 10,
+        )
+
+        if True:
+            print("Smoothed bedMethyl out: {}".format("bedMethyl_LOWESS.bedgraph"))
+            bedMethyl_LOWESS.to_path("bedMethyl_LOWESS.bedgraph")
+
+        # -------------------------
+        # Detect dips
+        # -------------------------
+        dips = dd.detectDips(
+            bedMethyl_LOWESS,
+            prominence=args.prominence,
+            height=args.height,
+            enrichment=args.enrichment,
+            broadness=args.broadness,
+            label=args.label,
+            color=args.color,
+            debug=True,
+        )
+
+    # -------------------------
+    # Write output
+    # -------------------------
+    print(f"Writing output to: {args.output}")
+    dips.to_path(args.output)
+
+
+if __name__ == "__main__":
+    main()
