@@ -6,6 +6,7 @@ from bedtable import BedTable
 
 import bedmethyl_smooth as bms
 import detect_dips as dd
+import filter_dips as fd
 
 def summarize_table(bt: BedTable, n_preview: int = 5) -> None:
     print("=" * 60)
@@ -85,19 +86,39 @@ def main():
         "--height",
         type=float,
         default=0.1,
-        help="Height for dip detection. Must be a float between 0 and 1. Lower values filter more dips. (default: 0.1)",
+        help="Height for dip detection. Lower values filter more dips. Must be a float between 0 and 1. (default: 0.1)",
     )
     dip_detect_group.add_argument(
         "--broadness",
         type=float,
         default=0.5,
-        help="Broadness of dips called.  Must be a float between 0 and 1. Higher values make broader entries. (default: 0.5)",
+        help="Broadness of dips called. Higher values make broader entries. Must be a float between 0 and 1. (default: 0.5)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
         help="Find regions enriched (rather than depleted) for methylation.",
+    )
+
+    dip_filter_group = parser.add_argument_group('Filtering Options')
+    dip_filter_group.add_argument(
+        "--min-size",
+        type=int,
+        default=1000,
+        help="Minimum dip size in base pairs. (default: 1000)",
+    )
+    dip_filter_group.add_argument(
+        "--min-score",
+        type=float,
+        default=100,
+        help="Minimum score that a dip must have to be kept. Must be an int between 0 and 1000.  (default: 100)",
+    )
+    dip_filter_group.add_argument(
+        "--cluster-distance",
+        type=int,
+        default=500000,
+        help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 500000)",
     )
 
     output_group = parser.add_argument_group('Output Options')
@@ -187,7 +208,7 @@ def main():
         # Detect dips
         # -------------------------
         dips = dd.detectDips(
-            bedMethyl_LOWESS,
+            bedgraph=bedMethyl_LOWESS,
             prominence=args.prominence,
             height=args.height,
             enrichment=args.enrichment,
@@ -195,6 +216,16 @@ def main():
             label=args.label,
             color=args.color,
             debug=True,
+        )
+
+        # -------------------------
+        # Filter dips
+        # -------------------------
+        dips = fd.filterDips(
+            dips=dips,
+            min_size=args.min_size,
+            min_score=args.min_score,
+            cluster_distance=args.cluster_distance
         )
 
     # -------------------------

@@ -1,213 +1,98 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Mapping, Sequence, List, Tuple
-
 import numpy as np
+
+from bedtable import BedTable
 
 
 def filterDips(
-    dips: DipResults,
-    dip_idxs,
-    fraction_modified,
+    dips: BedTable,
     min_size: int,
-    min_zscore: float,
-    cluster_distance,
+    min_score: float,
+    cluster_distance: int,
 ) -> BedTable:
 
-    # size filter
-    filtered, filtered_idxs = filter_by_size(
-        dips, dip_idxs, 
-        min_size
-    ) 
+    # size filter - remove dip regions smaller than min_size
+    # convert back to BedTable
+    size_filtered = BedTable([r for r in dips._records if r.length >= min_size], inferred_kind="bed", inferred_ncols=6)
 
-    # zscore filter
-    filtered, filtered_idxs = filter_by_zscore(
-        filtered, filtered_idxs, 
-        fraction_modified, 
-        min_zscore
-    ) 
+    # score filter - remove dip regions with score less than min_score
+    # convert back to BedTable
+    score_filtered = BedTable([r for r in size_filtered._records if (r.score is not None and int(r.score) >= min_score)], inferred_kind="bed", inferred_ncols=6)
 
-    # cluster filter
-    filtered, filtered_idxs = filter_by_cluster(
-        filtered, filtered_idxs,
+    # cluster filter - keep only dips in the largest cluster within cluster_distance
+    cluster_filtered = clusterFilter(
+        score_filtered,
         cluster_distance
     )
 
-    return filtered
+    return cluster_filtered
 
-
-def _apply_masking(
-    record: DipRecord,
-    dip_idxs: Optional[IdxPairs],
-    mask: Sequence[bool],
-) -> Tuple[DipRecord, Optional[IdxPairs]]:
-    """Filter DipRecord (starts/ends and any fields with same length) and dip_idxs by mask."""
-    filtered: DipRecord = {}
-    mlist = list(mask)
-    n_mask = len(mlist)
-    for key, values in record.items():
-        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
-            # filter lists that match the number of dips (e.g., starts/ends and any parallel lists)
-            if key in {"starts", "ends"} or len(values) == n_mask:
-                filtered[key] = [v for v, keep in zip(values, mlist) if keep]
-            else:
-                filtered[key] = list(values)
-        else:
-            filtered[key] = values
-
-    filtered_idxs = None
-    if dip_idxs is not None:
-        filtered_idxs = [p for p, keep in zip(dip_idxs, mlist) if keep]
-    return filtered, filtered_idxs
-
-
-def filter_by_size(
-    dips: DipRecord, 
-    dip_idxs: Optional[IdxPairs],
-    min_size: int
-) -> Tuple[DipRecord, Optional[IdxPairs]]:
-    """Keep only dips whose span >= min_size (in bp)."""
-    if min_size is None or min_size <= 0:
-        return dips, dip_idxs
-
-    starts = list(dips.get("starts", []))
-    ends = list(dips.get("ends", []))
-    if not starts or not ends or len(starts) != len(ends):
-        return dips, dip_idxs
-
-    mask: List[bool] = []
-    for s, e in zip(starts, ends):
-        mask.append(abs(int(e) - int(s)) >= int(min_size))
-
-    if all(mask):
-        return dips, dip_idxs
-    return _apply_masking(dips, dip_idxs, mask)
-
-
-def filter_by_zscore(
-    dips: DipRecord,
-    dip_idxs: Optional[IdxPairs],
-    fraction_modified: Sequence[float],
-    min_value_zscore: float
-) -> Tuple[DipRecord, Optional[IdxPairs]]:
+def clusterFilter(
+    dips: BedTable,
+    cluster_distance: int,
+    *,
+    require_min_members: int = 1,     # require at least N dips in chosen cluster
+) -> BedTable:
     """
-    Keep dips whose inside-mean is at least `min_value_zscore` SDs lower than the outside mean:
-        z = (outside_mean - inside_mean) / outside_std  >=  threshold
-    Uses dip_idxs (index pairs into fraction_modified) for fast slicing.
+    For each dip i, define a candidate cluster as all dips within cluster_distance
+    (on either side) of dip i. Rank candidate clusters by mean(score), then choose
+    the single best cluster and return only those dips.
+
+    Assumes dips are on a single chromosome and sorted by start.
     """
-    if min_value_zscore is None or min_value_zscore <= 0:
-        return dips, dip_idxs
-
-    if dip_idxs is None:
-        # For zscore filtering we require index pairs for efficiency and correctness.
-        # You can relax this if you want to fall back to position-based scans.
-        return dips, dip_idxs  # or raise ValueError("dip_idxs required for zscore filtering")
-
-    starts = dips.get("starts", [])
-    ends = dips.get("ends", [])
-    if not starts or not ends or len(starts) != len(ends):
-        return dips, dip_idxs
-
-    values = np.asarray(fraction_modified, dtype=float)
-    n = values.size
-    if n == 0:
-        return dips, dip_idxs
-
-    # Precompute global stats once for fallback cases
-    global_mean = float(np.mean(values))
-    global_std = float(np.std(values))
-
-    mask: List[bool] = []
-    for (li, ri), s, e in zip(dip_idxs, starts, ends):
-        # sanitize indices
-        l = max(0, min(int(li), n - 1))
-        r = max(0, min(int(ri), n - 1))
-        if l > r:
-            l, r = r, l
-
-        inside = values[l:r + 1]
-        inside_mean = float(np.mean(inside))
-
-        outside = np.concatenate([values[0:l+1], values[r:len(values)]])
-        outside_mean = np.mean(outside)
-        outside_std = np.std(outside)
-
-        if inside.size == 0:
-            # if we can't measure inside, conservatively keep
-            mask.append(True)
-            continue
-
-        if global_std <= 1e-9:
-            # if outside is nearly constant, require strictly lower inside mean
-            mask.append(inside_mean + 1e-9 < global_mean)
-            continue
-
-        # remove dips with z-score smaller (less sig) than min_value_zscore
-        z = (outside_mean - inside_mean) / outside_std
-        mask.append(z >= min_value_zscore)
-
-    if all(mask):
-        return dips, dip_idxs
-
-    return _apply_masking(dips, dip_idxs, mask)
-
-def filter_by_cluster(
-    record: DipRecord,
-    dip_idxs: Optional[IdxPairs],
-    cluster_distance: int
-) -> Tuple[DipRecord, Optional[IdxPairs]]:
-
-    # skip if negative
     if cluster_distance is None or cluster_distance < 0:
-        return record, dip_idxs
+        return dips
 
-    starts = list(record.get("starts", []))
-    ends = list(record.get("ends", []))
-    if not starts or not ends or len(starts) <= 1:
-        return record, dip_idxs
+    recs = list(dips._records)
+    n = len(recs)
+    if n <= 1:
+        return dips
 
-    # Build clusters in input order (assumes starts/ends are co-sorted)
-    clusters: List[List[tuple[int, int, int]]] = []
-    current: List[tuple[int, int, int]] = []
-    current_end: Optional[int] = None
-    for index, (start, end) in enumerate(zip(starts, ends)):
-        s = int(start); e = int(end)
-        if current and current_end is not None and s - current_end > int(cluster_distance):
-            clusters.append(current)
-            current = []
-        current.append((s, e, index))
-        current_end = max(current_end, e) if current_end is not None else e
-    if current:
-        clusters.append(current)
+    # Ensure sorted by start (important for two-pointer expansion)
+    recs = sorted(recs, key=lambda r: (r.start, r.end))
 
-    if len(clusters) <= 1:
-        return record, dip_idxs
+    starts = np.array([r.start for r in recs], dtype=int)
+    ends   = np.array([r.end   for r in recs], dtype=int)
+    scores = np.array([int(r.score) if r.score is not None else 0 for r in recs], dtype=int)
 
-    def cluster_score(cluster: List[tuple[int, int, int]]) -> tuple[int, int, int]:
-        # coverage of merged intervals, number of items, tie-breaker by earliest start
-        ordered = sorted((s, e) for s, e, _ in cluster)
-        coverage = 0
-        span_s, span_e = ordered[0]
-        for s, e in ordered[1:]:
-            if s <= span_e:
-                span_e = max(span_e, e)
-            else:
-                coverage += max(0, span_e - span_s)
-                span_s, span_e = s, e
-        coverage += max(0, span_e - span_s)
-        count = len(cluster)
-        first_start = min(s for s, _ in ordered)
-        return coverage, count, -first_start
+    x = (starts + ends) // 2
+    # within window if |xj - xi| <= cluster_distance
+    def within(j: int, i: int) -> bool:
+        return abs(int(x[j]) - int(x[i])) <= (cluster_distance // 2)
 
-    best_cluster = max(clusters, key=cluster_score)
-    keep_indices = {idx for *_unused, idx in best_cluster}
-    mask = [(i in keep_indices) for i in range(len(starts))]
+    # Helper: expand window around i using two pointers (since sorted)
+    def neighborhood_indices(i: int) -> Tuple[int, int]:
+        li = i
+        while li - 1 >= 0 and within(li - 1, i):
+            li -= 1
+        ri = i
+        while ri + 1 < n and within(ri + 1, i):
+            ri += 1
+        return li, ri
 
-    if all(mask):
-        return record, dip_idxs
-    return _apply_masking(record, dip_idxs, mask)
+    best = None  # tuple(rank_tuple, li, ri)
+    for i in range(n):
+        li, ri = neighborhood_indices(i)
+        if (ri - li + 1) < require_min_members:
+            continue
 
+        window_scores = scores[li : ri + 1]
+        mean_score = float(np.mean(window_scores)) if window_scores.size else 0.0
 
+        # optional tie-breakers: more members, larger span, earlier start
+        span_bp = int(ends[ri] - starts[li])
+        count = int(ri - li + 1)
+        first_start = int(starts[li])
 
-__all__ = ["filterDips"]
+        rank = (mean_score, count, span_bp, -first_start)
+        if best is None or rank > best[0]:
+            best = (rank, li, ri)
+
+    if best is None:
+        return BedTable([], inferred_kind="bed", inferred_ncols=6)
+
+    _, li, ri = best
+    out = recs[li : ri + 1]
+    return BedTable(out, inferred_kind="bed", inferred_ncols=6)

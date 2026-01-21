@@ -97,9 +97,9 @@ def detectDips(
         masked_regions=simple_idxs,
     )
     print(
-        f"[DEBUG] background methylation "
-        f"median={background_stats['median']:.3f} "
-        f"IQR=({background_stats['p25']:.3f}, {background_stats['p75']:.3f}) "
+        f"[DEBUG] {chrom_for_output} background methylation: "
+        f"median={background_stats['median']:.3f}; "
+        f"IQR=({background_stats['p25']:.3f}, {background_stats['p75']:.3f}); "
         f"n={len(background_stats['values'])}"
     )
 
@@ -109,7 +109,9 @@ def detectDips(
         smoothed,
         positions,
         background_stats["median"],
-        dip_center_idxs
+        dip_center_idxs,
+        label,
+        color
     )
 
     return dip_regions
@@ -286,6 +288,8 @@ def find_edges(
     positions: np.ndarray,
     background_median: float,
     dip_center_idxs: np.ndarray,
+    label: str,
+    color: str, 
     *,
     alpha: float = 0.5,
     min_depth: float = 0.0,
@@ -295,43 +299,9 @@ def find_edges(
     """
     Half-depth edge caller using a single background level (median outside masked dips/CDRs).
 
-    For each dip center c:
-      ymin = smoothed[c]
-      level = ymin + alpha * (background_median - ymin)
-
-    Then:
-      left edge  = nearest index left of c where smoothed >= level
-      right edge = nearest index right of c where smoothed >= level
-
-    Parameters
-    ----------
-    chrom : str
-        Chrom name (unused here except for readability / future expansion).
-    smoothed : np.ndarray
-        Smoothed methylation values, aligned to `positions`, assumed sorted by position.
-    positions : np.ndarray
-        Genomic positions (same length as smoothed), assumed sorted.
-    background_median : float
-        Background methylation estimate (e.g., median of smoothed outside masked regions).
-    dip_center_idxs : np.ndarray
-        Indices of dip centers into smoothed/positions.
-    alpha : float
-        Fraction of recovery from ymin to background used to define halfpoint.
-        alpha=0.5 is true half-depth.
-    min_depth : float
-        Minimum required dip depth (background_median - ymin) to accept a dip.
-    k_consecutive : int
-        Require k consecutive points meeting the threshold to call an edge (noise robustness).
-    end_inclusive : bool
-        If True, returned regions are (start_pos, end_pos) inclusive.
-        If False, regions are (start_pos, end_pos_exclusive) (BED-style; adds +1 to end).
-
-    Returns
-    -------
-    halfpoint_regions : list of (start_pos, end_pos)
-        Genomic coordinate spans for each dip.
-    halfpoint_idxs : list of (left_idx, right_idx)
-        Index spans for each dip, into the (filtered) arrays provided.
+    Returns:
+      dips_bed (BedTable): dip intervals with BED score 0-1000
+      halfpoint_idxs (list): [(left_idx, right_idx), ...]
     """
     smoothed = np.asarray(smoothed, dtype=float)
     positions = np.asarray(positions, dtype=int)
@@ -370,56 +340,84 @@ def find_edges(
             i += 1
         return n - 1
 
+    # --- 1) call halfpoint edges as indices ---
     halfpoint_idxs: List[Tuple[int, int]] = []
-
     for c in centers:
         if c < 0 or c >= n:
             continue
         y0 = smoothed[c]
         if not np.isfinite(y0):
             continue
-
         depth = float(background_median - y0)
         if depth < min_depth:
             continue
-
         level = float(y0 + alpha * depth)
-
         li = _scan_left(c, level)
         ri = _scan_right(c, level)
-
         if ri <= li:
             continue
-
-        start_pos = int(positions[li])
-        end_pos = int(positions[ri])
-
-        if not end_inclusive:
-            end_pos = end_pos + 1
-
         halfpoint_idxs.append((li, ri))
+    halfpoint_idxs = list(dict.fromkeys(tuple(x) for x in halfpoint_idxs)) # de-duplicate 
 
-    # de-duplicate (preserve order)
-    halfpoint_idxs = list(dict.fromkeys(tuple(x) for x in halfpoint_idxs))
+    # --- 2) compute raw scores per region ---
+    raw_scores: List[float] = []
+    for (l_i, r_i) in halfpoint_idxs:
+        l_i = max(0, min(int(l_i), n - 1))
+        r_i = max(0, min(int(r_i), n - 1))
+        if r_i <= l_i:
+            raw_scores.append(0.0)
+            continue
+        win = smoothed[l_i : r_i + 1]
+        win = win[np.isfinite(win)]
+        if win.size < 3:
+            raw_scores.append(0.0)
+            continue
+        deficit = np.maximum(0.0, float(background_median) - win)
+        s = float(np.median(deficit))
+        raw_scores.append(s)
 
+    raw_arr = np.asarray(raw_scores, dtype=float)
+    finite_raw = raw_arr[np.isfinite(raw_arr) & (raw_arr > 0)]
+    # robust scale: map the score_q quantile to 1000
+    if finite_raw.size == 0:
+        scale = 1.0
+    else:
+        scale = float(np.quantile(finite_raw, 0.95))
+        if scale <= 0 or not np.isfinite(scale):
+            scale = float(finite_raw.max()) if finite_raw.size else 1.0
+            if scale <= 0 or not np.isfinite(scale):
+                scale = 1.0
+
+    def _to_bed_score(s: float) -> int:
+        if not np.isfinite(s) or s <= 0:
+            return 0
+        v = int(round(1000.0 * (s / scale)))
+        return max(0, min(1000, v))
+
+    bed_scores = [_to_bed_score(s) for s in raw_arr]
+
+    # --- 3) build BedTable output with scores 0-1000 ---
     out: List[IntervalRecord] = []
-    for dip_id, (l_i, r_i) in enumerate(halfpoint_idxs, start=1):
-        l_i = max(0, min(l_i, len(positions) - 1))
-        r_i = max(0, min(r_i, len(positions) - 1))
+    for dip_id, ((l_i, r_i), bed_score) in enumerate(zip(halfpoint_idxs, bed_scores), start=1):
+        l_i = max(0, min(int(l_i), n - 1))
+        r_i = max(0, min(int(r_i), n - 1))
         if r_i <= l_i:
             continue
 
         start = int(positions[l_i])
         end = int(positions[r_i])
+        if not end_inclusive:
+            end = end + 1
 
         out.append(
             IntervalRecord(
                 chrom=chrom,
                 start=start,
                 end=end,
-                name=f"simpleDip_{dip_id}",
-                score=0,
-                strand='.',
+                name=f"{label}",
+                score=int(bed_score),
+                strand=".",
+                extras=(start, end, color),
             )
         )
 
