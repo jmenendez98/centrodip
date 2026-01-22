@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple, Optional
 
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
@@ -153,19 +154,45 @@ def _plot_dips(
 def _add_track_legends(
     ax: plt.Axes,
     coverage_norm: Normalize,
+    *,
+    cbar_width_in: float = 0.5,
+    cbar_height_in: float = 0.25,
+    x_offset_in: float = 0.15,   # distance from axes right edge
 ) -> None:
-    total_height = ax.get_ylim()[1] - ax.get_ylim()[0]
-    bar_width = 0.12
-    bar_height = 0.08
-    coverage_centre = 1.25
-    bottom = coverage_centre / total_height - bar_height / 2
+    """
+    Add a coverage colorbar with fixed physical size (inches).
+    """
 
-    coverage_ax = ax.inset_axes([1.02, bottom, bar_width, bar_height])
+    fig = ax.figure
+
+    # --- Figure and axes sizes in inches ---
+    fig_w_in, fig_h_in = fig.get_size_inches()
+
+    bbox = ax.get_position()  # axes bbox in figure-relative coords
+    ax_w_in = bbox.width * fig_w_in
+    ax_h_in = bbox.height * fig_h_in
+
+    # --- Convert inch sizes to axes-relative fractions ---
+    w_frac = cbar_width_in / ax_w_in
+    h_frac = cbar_height_in / ax_h_in
+
+    # --- Vertical placement (centered at coverage band) ---
+    total_height = ax.get_ylim()[1] - ax.get_ylim()[0]
+    coverage_centre = 1.25
+    y_center_data = coverage_centre / total_height
+    y_frac = y_center_data - h_frac / 2
+
+    # --- Horizontal placement: fixed offset from right edge ---
+    x_frac = 1.0 + (x_offset_in / ax_w_in)
+
+    coverage_ax = ax.inset_axes([x_frac, y_frac, w_frac, h_frac])
+
     coverage_cbar = plt.colorbar(
         ScalarMappable(norm=coverage_norm, cmap="Greys"),
         cax=coverage_ax,
         orientation="horizontal",
     )
+
     coverage_cbar.ax.tick_params(labelsize=6, pad=1)
     coverage_cbar.set_ticks([0, 10])
     coverage_cbar.ax.set_xlabel("Cov", fontsize=6, labelpad=-3)
@@ -259,32 +286,53 @@ def centrodipSummaryPlot_bedtable(
     cov_col_1based: int = 8,
     frac_mod_col_1based: int = 10,
     x_mode: str = "start",
-    panel_height: float = 2.0,
-    figure_width: float = 16.0,
+    panel_height: float = 3.0,
+    bottom_margin_in: float = 1,
+    left_margin_in: float = 1.5,
+    right_margin_in: float = 1,
+    bp_per_inch: float = 250_000.0,   # 250kb per inch
 ) -> Path:
     """
-    Replacement for centrodipSummaryPlot that consumes BedTables.
-
-    Tracks:
-      - Coverage band from bedMethyl (cov_col_1based)
-      - Raw fraction/percent modified line from bedMethyl (frac_mod_col_1based)
-      - Smoothed LOWESS line from lowess_bg (extras[0])
-      - Unfiltered dips (optional) as rectangles
-      - Filtered dips as rectangles
+    ...
     """
-    # Determine chromosome order from bedMethyl
+
     chroms = sorted({r.chrom for r in bedMethyl._records})
     if not chroms:
         raise ValueError("bedMethyl has no records.")
 
-    figure_height = max(panel_height * len(chroms), panel_height)
+    # ----- Determine span (in bp) for THIS plot -----
+    # In your usage, bedMethyl is already per-chrom/per-region for this plot.
+    if x_mode == "start":
+        all_pos = np.asarray([r.start for r in bedMethyl._records], dtype=int)
+    else:
+        all_pos = np.asarray([(r.start + r.end) // 2 for r in bedMethyl._records], dtype=int)
+
+    x_min_global = int(np.min(all_pos))
+    x_max_global = int(np.max(all_pos))
+    span_bp = max(1, x_max_global - x_min_global)
+
+    # ----- Convert span to *panel* width in inches -----
+    panel_width_in = span_bp / float(bp_per_inch)
+
+    # ----- Total figure width includes fixed margins -----
+    fig_width_in = left_margin_in + panel_width_in + right_margin_in
+    fig_height_in = panel_height + bottom_margin_in
+
     fig, axes = plt.subplots(
-        nrows=len(chroms),
-        ncols=1,
-        figsize=(figure_width, figure_height),
+        nrows=1, ncols=1,
+        figsize=(fig_width_in, fig_height_in),
         squeeze=False,
         sharex=False,
     )
+
+    # ----- Enforce 1 inch margins by placing axes explicitly -----
+    # Fractions of figure width:
+    left_frac = left_margin_in / fig_width_in
+    right_frac = 1.0 - (right_margin_in / fig_width_in)
+
+    # Vertical margins (still as fractions; keep modest and stable)
+    bottom_frac = bottom_margin_in / fig_height_in
+    top_frac = 0.95
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
 
@@ -381,6 +429,31 @@ def centrodipSummaryPlot_bedtable(
             "Unfiltered dips",
         ])
 
+        # xticks are each even 500kb in range xmin,xmax
+        span = x_max - x_min
+        if span <= 1_000_000:
+            step = 100_000
+        elif span <= 5_000_000:
+            step = 500_000
+        elif span <= 20_000_000:
+            step = 1_000_000
+        else:
+            step = 5_000_000
+
+        tick_start = int(math.ceil(x_min / step) * step)   # first tick >= x_min
+        tick_end   = int(math.floor(x_max / step) * step)  # last tick  <= x_max
+
+        if tick_end >= tick_start:
+            ax.set_xticks(np.arange(tick_start, tick_end + 1, step))
+        else:
+            ax.set_xticks([x_min, x_max])  # fallback for tiny windows
+
+        xticks = np.arange(tick_start, tick_end + 1, step)
+        xticks_labs = [f"{x / 1_000_000:.2f} Mb" for x in xticks] # float 1Mb but with 2 decimal places
+
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(xticks_labs, fontsize=8)
+
         ax.set_ylabel(f"{chrom}")
         ax.tick_params(axis="y", which="both", length=0)
         ax.grid(False)
@@ -401,7 +474,12 @@ def centrodipSummaryPlot_bedtable(
         secax.set_ylabel("")
 
     axes[-1][0].set_xlabel("Genomic position (bp)")
-    fig.tight_layout(rect=[0, 0, 0.9, 1])
+    fig.subplots_adjust(
+        left=left_frac,
+        right=right_frac,
+        bottom=bottom_frac,
+        top=top_frac,
+    )
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

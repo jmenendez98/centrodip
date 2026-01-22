@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
+import os
+import sys
 import argparse
+
+import concurrent.futures
 
 from pathlib import Path
 from bedtable import BedTable
@@ -9,6 +13,55 @@ import bedmethyl_smooth as bms
 import detect_dips as dd
 import filter_dips as fd
 import summary_plot as pd
+
+
+def _process_chrom(item):
+    chrom, bm_chr, argsd = item
+
+    bedGraph_LOWESS = bms.bedMethyl_LOWESS(
+        bm_chr,
+        window_bp=argsd["window_size"],
+        cov_conf=argsd["cov_conf"],
+        y_col_1based=11,
+        cov_col_1based=10,
+    )
+
+    dips, lowess_bg_stats = dd.detectDips(
+        bedgraph=bedGraph_LOWESS,
+        prominence=argsd["prominence"],
+        height=argsd["height"],
+        enrichment=argsd["enrichment"],
+        broadness=argsd["broadness"],
+        label=argsd["label"],
+        color=argsd["color"],
+    )
+
+    filtered_dips = fd.filterDips(
+        dips=dips,
+        min_size=argsd["min_size"],
+        min_score=argsd["min_score"],
+        cluster_distance=argsd["cluster_distance"],
+    )
+
+    debug_msg = None
+    if argsd["debug"]:
+        debug_msg = (
+            f"[DEBUG] {chrom}:\n"
+            f" - Smoothed {len(bedGraph_LOWESS)} CpG sites.\n"
+            f" - Background identified: median={lowess_bg_stats['median']:.3f}; "
+            f"IQR=({lowess_bg_stats['p25']:.3f}, {lowess_bg_stats['p75']:.3f}); "
+            f"n={len(lowess_bg_stats['values'])}.\n"
+            f" - Detected {len(dips)} dips.\n"
+            f" - Filtered to {len(filtered_dips)} dips.\n"
+        )
+
+    plot_path = None
+    if argsd["plot"]:
+        out_path = Path(argsd["output"])
+        plot_dir = out_path.parent / f"{out_path.stem}_plots"
+        plot_path = str(plot_dir / f"{out_path.stem}.{chrom}.summary.png")
+
+    return chrom, bm_chr, bedGraph_LOWESS, dips, filtered_dips, lowess_bg_stats, debug_msg, plot_path
 
 
 def main():
@@ -155,67 +208,96 @@ def main():
         inferred_kind=bedMethyl.inferred_kind,
     )
 
-    lowess_records = []
-    dip_records = []
-
-    for r in bedMethyl_in_region.groupby_chrom():
-        # -------------------------
-        # Smooth bedMethyl
-        # -------------------------
-        bedGraph_LOWESS = bms.bedMethyl_LOWESS(
-            bedMethyl_in_region,
-            window_bp = args.window_size,
-            cov_conf = args.cov_conf,
-            y_col_1based = 11,
-            cov_col_1based = 10,
-        )
-
-        if True:
-            print("Smoothed bedMethyl out: {}".format("bedMethyl_LOWESS.bedgraph"))
-            bedGraph_LOWESS.to_path("bedMethyl_LOWESS.bedgraph")
-
-        # -------------------------
-        # Detect dips
-        # -------------------------
-        dips = dd.detectDips(
-            bedgraph=bedGraph_LOWESS,
-            prominence=args.prominence,
-            height=args.height,
-            enrichment=args.enrichment,
-            broadness=args.broadness,
-            label=args.label,
-            color=args.color,
-            debug=True,
-        )
-
-        # -------------------------
-        # Filter dips
-        # -------------------------
-        filtered_dips = fd.filterDips(
-            dips=dips,
-            min_size=args.min_size,
-            min_score=args.min_score,
-            cluster_distance=args.cluster_distance
-        )
-
-    # -------------------------
-    # Write output
-    # -------------------------
-    print(f"Writing output to: {args.output}")
-    dips.to_path(args.output)
-
+    out_path = Path(args.output)
+    plot_dir = out_path.parent / f"{out_path.stem}_plots"
     if args.plot:
+        plot_dir.mkdir(parents=True, exist_ok=True)
 
+    argsd = {
+        "window_size": args.window_size,
+        "cov_conf": args.cov_conf,
+        "prominence": args.prominence,
+        "height": args.height,
+        "enrichment": args.enrichment,
+        "broadness": args.broadness,
+        "label": args.label,
+        "color": args.color,
+        "min_size": args.min_size,
+        "min_score": args.min_score,
+        "cluster_distance": args.cluster_distance,
+        "debug": args.debug,
+        "plot": args.plot,
+        "output": out_path,
+    }
 
-        plot_path = str(Path(args.output).with_suffix(".summary.png"))
-        print(f"Writing summary plot to: {plot_path}")
-        pd.centrodipSummaryPlot_bedtable(
-            bedMethyl=bedMethyl,
-            lowess_bg=bedGraph_LOWESS,
-            dips_unfiltered=dips,
-            dips_final=filtered_dips,
-            output_path=plot_path
-        )
+    chrom_map = bedMethyl_in_region.groupby_chrom()  # should be dict-like: chrom -> BedTable or list[IntervalRecord]
+
+    work_items = []
+    for chrom, chrom_records in chrom_map.items():
+        # If groupby_chrom returns lists of records, wrap into BedTable
+        if isinstance(chrom_records, BedTable):
+            bm_chr = chrom_records
+        else:
+            bm_chr = BedTable(list(chrom_records), inferred_kind=bedMethyl_in_region.inferred_kind)
+
+        work_items.append((chrom, bm_chr, argsd))
+
+    all_lowess = []
+    all_dips = []
+    all_filtered = []
+    all_bg_stats = {}  
+    
+    with concurrent.futures.ProcessPoolExecutor() as ex:
+        futures = [ex.submit(_process_chrom, item) for item in work_items]
+
+        for fut in concurrent.futures.as_completed(futures):
+            chrom, bm_chr, bedGraph_LOWESS, dips, filtered_dips, lowess_bg_stats, debug_msg, plot_path = fut.result()
+
+            # Debug printing (main process so logs aren't interleaved as badly)
+            if debug_msg:
+                print(debug_msg, end="")
+
+            # Plotting (do this in main process to avoid matplotlib multiprocessing issues)
+            if args.plot and plot_path is not None:
+                Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
+                if args.debug:
+                    print(f"Writing summary plot to: {plot_path}")
+                pd.centrodipSummaryPlot_bedtable(
+                    bedMethyl=bm_chr,              # plot only this chrom
+                    lowess_bg=bedGraph_LOWESS,
+                    dips_unfiltered=dips,
+                    dips_final=filtered_dips,
+                    output_path=plot_path,
+                )
+
+            # Collect outputs
+            all_lowess.extend(list(bedGraph_LOWESS._records))
+            all_dips.extend(list(dips._records))
+            all_filtered.extend(list(filtered_dips._records))
+            all_bg_stats[chrom] = lowess_bg_stats
+
+    # ---- Concatenate into single BedTables ----
+    bedGraph_LOWESS_all = BedTable(all_lowess, inferred_kind="bedgraph", inferred_ncols=4)
+    dips_all = BedTable(all_dips, inferred_kind="bed", inferred_ncols=6)
+    filtered_dips_all = BedTable(all_filtered, inferred_kind="bed", inferred_ncols=6)
+
+    if args.debug:
+        # save smoothed bedMethyl
+        lowess_path = str(Path(args.output).with_suffix(".LOWESS.bedgraph"))
+        print(f"Smoothed bedMethyl out: {lowess_path}")
+        bedGraph_LOWESS_all.to_path(lowess_path)
+
+        # save unfiltered/detected dips
+        unfiltered_path = str(Path(args.output).with_suffix(".detected_dips.bed"))
+        print(f"Detected dips out: {unfiltered_path}")
+        dips_all.to_path(unfiltered_path)
+
+    # -------------------------
+    # Write output (FINAL dips)
+    # -------------------------
+    if args.debug:
+        print(f"Writing output to: {args.output}")
+    filtered_dips_all.to_path(out_path)
 
 
 if __name__ == "__main__":

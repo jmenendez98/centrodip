@@ -15,7 +15,6 @@ def detectDips(
     height: float,
     enrichment: bool,
     broadness: float,
-    debug: bool = False,
     x_mode: str = "start",  # "start" or "midpoint",
     label: str = "CDR",
     color: str = "50,50,255",
@@ -56,9 +55,6 @@ def detectDips(
 
     # Ensure we're operating per-chromosome (this function assumes one chrom at a time)
     chroms = {r.chrom for r in rows}
-    if len(chroms) != 1 and debug:
-        print(f"[WARN] detectDips received multiple chroms: {sorted(chroms)}")
-        print("       Consider calling detectDips per chromosome via bedgraph.groupby_chrom().")
     chrom_for_output = rows[0].chrom
 
     # x positions used for reporting dips (in your old code this was cpg_pos)
@@ -96,12 +92,6 @@ def detectDips(
         positions=positions,
         masked_regions=simple_idxs,
     )
-    print(
-        f"[DEBUG] {chrom_for_output} background methylation: "
-        f"median={background_stats['median']:.3f}; "
-        f"IQR=({background_stats['p25']:.3f}, {background_stats['p75']:.3f}); "
-        f"n={len(background_stats['values'])}"
-    )
 
     # get half-point edges using dip_centers, smoothed, and background median
     dip_regions, halfpoint_idxs = find_edges(
@@ -114,7 +104,7 @@ def detectDips(
         color
     )
 
-    return dip_regions
+    return dip_regions, background_stats
 
 
 def find_dip_centers(
