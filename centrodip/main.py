@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import argparse
 
 from pathlib import Path
@@ -7,39 +8,8 @@ from bedtable import BedTable
 import bedmethyl_smooth as bms
 import detect_dips as dd
 import filter_dips as fd
+import summary_plot as pd
 
-def summarize_table(bt: BedTable, n_preview: int = 5) -> None:
-    print("=" * 60)
-    print(f"Source file      : {bt.source_path}")
-    print(f"Inferred kind    : {bt.inferred_kind}")      # bed / bedgraph
-    print(f"Inferred #cols   : {bt.inferred_ncols}")
-    print(f"# records        : {len(bt)}")
-    print(f"# comments       : {len(bt.comments)}")
-    print(f"# track lines    : {len(bt.track_lines)}")
-    print(f"# browser lines  : {len(bt.browser_lines)}")
-
-    if len(bt) == 0:
-        print("No records found.")
-        return
-
-    # Inspect first record to understand schema
-    r0 = bt[0]
-    print("\nFirst record:")
-    print(f"  chrom   : {r0.chrom}")
-    print(f"  start   : {r0.start}")
-    print(f"  end     : {r0.end}")
-    print(f"  length  : {r0.length}")
-    print(f"  name    : {r0.name}")
-    print(f"  score   : {r0.score}")
-    print(f"  strand  : {r0.strand}")
-    print(f"  extras  : {r0.extras}")
-
-    print(f"\nPreviewing first {n_preview} records:")
-    for i, r in enumerate(bt[:n_preview]):
-        print(
-            f"{i:02d}  {r.chrom}:{r.start}-{r.end}  "
-            f"name={r.name} score={r.score} strand={r.strand} extras={r.extras}"
-        )
 
 def main():
     import argparse
@@ -192,7 +162,7 @@ def main():
         # -------------------------
         # Smooth bedMethyl
         # -------------------------
-        bedMethyl_LOWESS = bms.bedMethyl_LOWESS(
+        bedGraph_LOWESS = bms.bedMethyl_LOWESS(
             bedMethyl_in_region,
             window_bp = args.window_size,
             cov_conf = args.cov_conf,
@@ -202,13 +172,13 @@ def main():
 
         if True:
             print("Smoothed bedMethyl out: {}".format("bedMethyl_LOWESS.bedgraph"))
-            bedMethyl_LOWESS.to_path("bedMethyl_LOWESS.bedgraph")
+            bedGraph_LOWESS.to_path("bedMethyl_LOWESS.bedgraph")
 
         # -------------------------
         # Detect dips
         # -------------------------
         dips = dd.detectDips(
-            bedgraph=bedMethyl_LOWESS,
+            bedgraph=bedGraph_LOWESS,
             prominence=args.prominence,
             height=args.height,
             enrichment=args.enrichment,
@@ -221,7 +191,7 @@ def main():
         # -------------------------
         # Filter dips
         # -------------------------
-        dips = fd.filterDips(
+        filtered_dips = fd.filterDips(
             dips=dips,
             min_size=args.min_size,
             min_score=args.min_score,
@@ -233,6 +203,19 @@ def main():
     # -------------------------
     print(f"Writing output to: {args.output}")
     dips.to_path(args.output)
+
+    if args.plot:
+
+
+        plot_path = str(Path(args.output).with_suffix(".summary.png"))
+        print(f"Writing summary plot to: {plot_path}")
+        pd.centrodipSummaryPlot_bedtable(
+            bedMethyl=bedMethyl,
+            lowess_bg=bedGraph_LOWESS,
+            dips_unfiltered=dips,
+            dips_final=filtered_dips,
+            output_path=plot_path
+        )
 
 
 if __name__ == "__main__":

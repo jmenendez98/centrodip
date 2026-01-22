@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple, Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,12 +9,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
-
-RegionDict = Dict[str, Dict[str, List[int]]]
-MethylationRecord = Dict[str, List[float]]
-MethylationDict = Dict[str, MethylationRecord]
-DipRecord = Dict[str, List[int]]
-DipDict = Dict[str, DipRecord]
+from bedtable import BedTable, IntervalRecord
 
 
 def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
@@ -31,7 +26,6 @@ def _position_edges(positions: Sequence[float]) -> np.ndarray:
         return np.asarray([])
 
     positions_arr = np.asarray(positions, dtype=float).ravel()
-
     if positions_arr.size == 0:
         return np.asarray([])
 
@@ -51,121 +45,6 @@ def _position_edges(positions: Sequence[float]) -> np.ndarray:
     return np.concatenate(([left_edge], midpoints, [right_edge]))
 
 
-def _fraction_window_bins(
-    positions: Sequence[float],
-    values: Sequence[float],
-    region_start: int,
-    region_end: int,
-    window_size: float = 1000.0,
-) -> Tuple[np.ndarray, np.ndarray]:
-    if positions is None or values is None:
-        return np.asarray([]), np.asarray([])
-
-    pos_arr = np.asarray(positions, dtype=float).ravel()
-    val_arr = np.asarray(values, dtype=float).ravel()
-
-    if pos_arr.size == 0 or val_arr.size == 0:
-        return np.asarray([]), np.asarray([])
-
-    region_min = float(min(region_start, region_end))
-    region_max = float(max(region_start, region_end))
-    if region_min == region_max:
-        region_min -= 0.5
-        region_max += 0.5
-
-    edges = np.arange(region_min, region_max, window_size, dtype=float)
-    if edges.size == 0 or edges[-1] < region_max:
-        edges = np.append(edges, region_max)
-    else:
-        edges[-1] = region_max
-
-    if edges[0] != region_min:
-        edges = np.insert(edges, 0, region_min)
-
-    means: List[float] = []
-    for left, right in zip(edges[:-1], edges[1:]):
-        if right < left:
-            left, right = right, left
-        is_last = np.isclose(right, edges[-1])
-        mask = (pos_arr >= left) & (pos_arr < right if not is_last else pos_arr <= right)
-        if np.any(mask):
-            means.append(float(np.nanmean(val_arr[mask])))
-        else:
-            means.append(np.nan)
-
-    return edges, np.asarray(means, dtype=float)
-
-
-def _slice_methylation_record(
-    record: MethylationRecord,
-    region_start: int,
-    region_end: int,
-) -> MethylationRecord:
-    if not record:
-        return {}
-
-    positions = list(record.get("position", []))
-    if not positions:
-        return {key: [] for key in record.keys()}
-
-    region_min = float(min(region_start, region_end))
-    region_max = float(max(region_start, region_end))
-    mask = [region_min <= float(pos) <= region_max for pos in positions]
-    if not any(mask):
-        return {key: [] for key in record.keys()}
-
-    indices = [idx for idx, keep in enumerate(mask) if keep]
-    sliced: MethylationRecord = {}
-    for key, values in record.items():
-        if isinstance(values, list) and len(values) == len(positions):
-            sliced[key] = [values[idx] for idx in indices]
-        else:
-            sliced[key] = list(values) if isinstance(values, list) else []
-
-    # Ensure expected keys exist even if absent in the original record.
-    for key in (
-        "position",
-        "fraction_modified",
-        "valid_coverage",
-        "lowess_fraction_modified",
-    ):
-        sliced.setdefault(key, [])
-
-    return sliced
-
-
-def _filter_dips_for_region(
-    dips: DipRecord,
-    region_start: int,
-    region_end: int,
-) -> DipRecord:
-    if not dips:
-        return {"starts": [], "ends": []}
-
-    region_min = int(min(region_start, region_end))
-    region_max = int(max(region_start, region_end))
-
-    starts = dips.get("starts", [])
-    ends = dips.get("ends", [])
-
-    region_starts: List[int] = []
-    region_ends: List[int] = []
-
-    for dip_start, dip_end in zip(starts, ends):
-        dip_start = int(dip_start)
-        dip_end = int(dip_end)
-
-        if dip_end < region_min or dip_start > region_max:
-            continue
-
-        clipped_start = max(dip_start, region_min)
-        clipped_end = min(dip_end, region_max)
-        region_starts.append(clipped_start)
-        region_ends.append(clipped_end)
-
-    return {"starts": region_starts, "ends": region_ends}
-
-
 def _plot_band(
     ax: plt.Axes,
     x,
@@ -181,7 +60,6 @@ def _plot_band(
 
     x_arr = np.asarray(x, dtype=float)
     v_arr = np.asarray(val, dtype=float)
-
     if x_arr.size == 0 or v_arr.size == 0:
         return
 
@@ -194,7 +72,7 @@ def _plot_band(
 
     edges_x = _position_edges(x_arr)
     if edges_x.size < 2:
-        return  # nothing to draw
+        return
 
     data = np.ma.masked_invalid(v_arr[np.newaxis, :n])
     edges_y = np.asarray([y_bottom, y_top], dtype=float)
@@ -207,6 +85,7 @@ def _plot_band(
         cmap=plt.get_cmap(cmap_name),
         norm=norm,
     )
+
 
 def _plot_fraction_line(
     ax: plt.Axes,
@@ -222,7 +101,6 @@ def _plot_fraction_line(
 
     positions = np.asarray(xpos, dtype=float)
     values = np.asarray(val, dtype=float)
-
     if positions.size == 0 or values.size == 0:
         return
 
@@ -233,6 +111,7 @@ def _plot_fraction_line(
     positions = positions[:n]
     values = values[:n]
 
+    # Your values are in percent (0..100) in your current pipeline
     y_values = 1.75 + values / 100.0
     ax.plot(positions, y_values, color=color, linewidth=linewidth, alpha=alpha)
 
@@ -292,25 +171,115 @@ def _add_track_legends(
     coverage_cbar.ax.set_xlabel("Cov", fontsize=6, labelpad=-3)
 
 
-def centrodipSummaryPlot(
-    results,
+# ---------- BedTable helpers ----------
+
+def _bt_filter_chrom(bt: Optional[BedTable], chrom: str) -> Optional[BedTable]:
+    if bt is None:
+        return None
+    recs = [r for r in bt._records if r.chrom == chrom]
+    if not recs:
+        return BedTable([], inferred_kind=bt.inferred_kind, inferred_ncols=bt.inferred_ncols)
+    return BedTable(recs, inferred_kind=bt.inferred_kind, inferred_ncols=bt.inferred_ncols)
+
+
+def _bt_positions(bt: BedTable, *, x_mode: str = "start") -> np.ndarray:
+    if x_mode == "start":
+        return np.asarray([r.start for r in bt._records], dtype=int)
+    if x_mode == "midpoint":
+        return np.asarray([(r.start + r.end) // 2 for r in bt._records], dtype=int)
+    raise ValueError("x_mode must be 'start' or 'midpoint'")
+
+
+def _bt_get_col_1based(bt: BedTable, col_1based: int, *, as_float: bool = True) -> np.ndarray:
+    """
+    Uses BedTable.get_column_1based if you have it; otherwise falls back to extras access.
+    """
+    if hasattr(bt, "get_column_1based"):
+        vals = bt.get_column_1based(col_1based, as_float=as_float)
+        return np.asarray(vals, dtype=float if as_float else object)
+
+    # Fallback: columns 1..6 are BED; 7+ are extras
+    idx0 = col_1based - 1
+    out = []
+    for r in bt._records:
+        if idx0 == 0:
+            out.append(r.chrom)
+        elif idx0 == 1:
+            out.append(r.start)
+        elif idx0 == 2:
+            out.append(r.end)
+        elif idx0 == 3:
+            out.append(r.name)
+        elif idx0 == 4:
+            out.append(r.score)
+        elif idx0 == 5:
+            out.append(r.strand)
+        else:
+            ex_i = idx0 - 6
+            if r.extras is None or ex_i >= len(r.extras):
+                out.append(np.nan if as_float else None)
+            else:
+                out.append(r.extras[ex_i])
+    return np.asarray(out, dtype=float if as_float else object)
+
+
+def _lowess_smoothed_from_bedgraph(lowess_bg: BedTable) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    lowess_bg records have extras=(smoothedY, dY).
+    Returns:
+      x_positions (start)
+      smoothedY
+    """
+    xs = np.asarray([r.start for r in lowess_bg._records], dtype=int)
+    ys = []
+    for r in lowess_bg._records:
+        if r.extras is None or len(r.extras) < 1:
+            ys.append(np.nan)
+        else:
+            ys.append(float(r.extras[0]))
+    return xs, np.asarray(ys, dtype=float)
+
+
+def _dips_to_starts_ends(dips: Optional[BedTable]) -> Tuple[List[int], List[int]]:
+    if dips is None:
+        return [], []
+    starts = [int(r.start) for r in dips._records]
+    ends = [int(r.end) for r in dips._records]
+    return starts, ends
+
+
+# ---------- Main plotting entry ----------
+def centrodipSummaryPlot_bedtable(
+    bedMethyl: BedTable,
+    lowess_bg: BedTable,
+    dips_final: Optional[BedTable],
+    dips_unfiltered: Optional[BedTable],
     output_path: Path | str,
+    *,
+    cov_col_1based: int = 8,
+    frac_mod_col_1based: int = 10,
+    x_mode: str = "start",
     panel_height: float = 2.0,
     figure_width: float = 16.0,
 ) -> Path:
+    """
+    Replacement for centrodipSummaryPlot that consumes BedTables.
 
-    chromosomes: List[str] = []
-    for chrom in results.keys():
-        chromosomes.append(chrom)
+    Tracks:
+      - Coverage band from bedMethyl (cov_col_1based)
+      - Raw fraction/percent modified line from bedMethyl (frac_mod_col_1based)
+      - Smoothed LOWESS line from lowess_bg (extras[0])
+      - Unfiltered dips (optional) as rectangles
+      - Filtered dips as rectangles
+    """
+    # Determine chromosome order from bedMethyl
+    chroms = sorted({r.chrom for r in bedMethyl._records})
+    if not chroms:
+        raise ValueError("bedMethyl has no records.")
 
-    chromosomes.sort()
-
-    if not chromosomes:
-        raise ValueError("No regions available to plot.")
-
-    figure_height = max(panel_height * len(chromosomes), panel_height)
+    figure_height = max(panel_height * len(chroms), panel_height)
     fig, axes = plt.subplots(
-        nrows=len(chromosomes),
+        nrows=len(chroms),
         ncols=1,
         figsize=(figure_width, figure_height),
         squeeze=False,
@@ -319,38 +288,44 @@ def centrodipSummaryPlot(
 
     coverage_norm = Normalize(vmin=0, vmax=10, clip=True)
 
-    for axis_row, chrom in zip(axes, chromosomes):
+    for axis_row, chrom in zip(axes, chroms):
         ax = axis_row[0]
-        chrom_results = results.get(chrom, {})
 
-        cpg_pos = chrom_results.get("cpg_pos", [])
-        cpg_coverage = chrom_results.get("valid_coverage", [])
-        frac_mod = chrom_results.get("fraction_modified", [])
-        lowess_frac_mod = chrom_results.get("lowess_fraction_modified", [])
+        bm_chr = _bt_filter_chrom(bedMethyl, chrom)
+        lw_chr = _bt_filter_chrom(lowess_bg, chrom)
+        df_chr = _bt_filter_chrom(dips_final, chrom) if dips_final is not None else None
+        du_chr = _bt_filter_chrom(dips_unfiltered, chrom) if dips_unfiltered is not None else None
 
-        if cpg_pos is None or len(cpg_pos) == 0:
+        if bm_chr is None or len(bm_chr._records) == 0:
             ax.set_axis_off()
             continue
 
-        x_min = min(cpg_pos)
-        x_max = max(cpg_pos)
+        cpg_pos = _bt_positions(bm_chr, x_mode=x_mode)
+        cpg_coverage = _bt_get_col_1based(bm_chr, cov_col_1based, as_float=True)
+        frac_mod = _bt_get_col_1based(bm_chr, frac_mod_col_1based, as_float=True)
+
+        # LOWESS line from bedGraph-like output
+        lowess_x, lowess_y = (np.asarray([]), np.asarray([]))
+        if lw_chr is not None and len(lw_chr._records) > 0:
+            lowess_x, lowess_y = _lowess_smoothed_from_bedgraph(lw_chr)
+
+        x_min = int(np.min(cpg_pos))
+        x_max = int(np.max(cpg_pos))
         if x_min == x_max:
-            x_min -= 10000
-            x_max += 10000
+            x_min -= 10_000
+            x_max += 10_000
 
-        # _plot_regions(ax, regions)
-
-
-        # plot coverage bar
+        # coverage band
         _plot_band(
             ax=ax,
             x=cpg_pos,
             val=cpg_coverage,
-            y_bottom=1.0, y_top=1.5,
+            y_bottom=1.0,
+            y_top=1.5,
             norm=coverage_norm,
         )
 
-        # plot the raw fraction modified values as a line
+        # raw frac/percent modified
         _plot_fraction_line(
             ax=ax,
             xpos=cpg_pos,
@@ -359,22 +334,22 @@ def centrodipSummaryPlot(
             color="black",
         )
 
-        # plot the smoothed LOWESS fraction modified line
-        _plot_fraction_line(
-            ax=ax,
-            xpos=cpg_pos,
-            val=lowess_frac_mod,
-            alpha=0.75,
-            color="orange",
-        )
+        # smoothed line
+        if lowess_x.size and lowess_y.size:
+            _plot_fraction_line(
+                ax=ax,
+                xpos=lowess_x,
+                val=lowess_y,
+                alpha=0.75,
+                color="orange",
+            )
 
-        # plot unfiltered dips
-        unfiltered_dip_starts = chrom_results.get("unfiltered_dip_starts", [])
-        unfiltered_dip_ends = chrom_results.get("unfiltered_dip_ends", [])
+        # unfiltered dips
+        u_starts, u_ends = _dips_to_starts_ends(du_chr)
         _plot_dips(
             ax=ax,
-            starts=unfiltered_dip_starts,
-            ends=unfiltered_dip_ends,
+            starts=u_starts,
+            ends=u_ends,
             y_bottom=3.6,
             height=0.35,
             color="tab:blue",
@@ -382,13 +357,12 @@ def centrodipSummaryPlot(
             zorder=3,
         )
 
-        # plot final dips
-        dip_starts = chrom_results.get("dip_starts", [])
-        dip_ends = chrom_results.get("dip_ends", [])
+        # final dips
+        f_starts, f_ends = _dips_to_starts_ends(df_chr)
         _plot_dips(
             ax=ax,
-            starts=dip_starts,
-            ends=dip_ends,
+            starts=f_starts,
+            ends=f_ends,
             y_bottom=3.0,
             height=0.5,
             color="black",
@@ -408,24 +382,12 @@ def centrodipSummaryPlot(
         ])
 
         ax.set_ylabel(f"{chrom}")
-        ax.tick_params(axis=u'y', which=u'both', length=0)
+        ax.tick_params(axis="y", which="both", length=0)
         ax.grid(False)
         _add_track_legends(ax, coverage_norm)
 
-        ax.axhline(
-            y=1.75,
-            color="gray",
-            linestyle="--",
-            linewidth=0.5,
-            alpha=0.5,
-        )
-        ax.axhline(
-            y=2.75,
-            color="gray",
-            linestyle="--",
-            linewidth=0.5,
-            alpha=0.5,
-        )
+        ax.axhline(y=1.75, color="gray", linestyle="--", linewidth=0.5, alpha=0.5)
+        ax.axhline(y=2.75, color="gray", linestyle="--", linewidth=0.5, alpha=0.5)
 
         secax = ax.secondary_yaxis(
             "right",
@@ -439,7 +401,6 @@ def centrodipSummaryPlot(
         secax.set_ylabel("")
 
     axes[-1][0].set_xlabel("Genomic position (bp)")
-
     fig.tight_layout(rect=[0, 0, 0.9, 1])
 
     output_path = Path(output_path)
@@ -450,4 +411,4 @@ def centrodipSummaryPlot(
     return output_path
 
 
-__all__ = ["centrodip_summary_plot"]
+__all__ = ["centrodipSummaryPlot_bedtable"]
