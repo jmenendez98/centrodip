@@ -10,7 +10,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
-from bedtable import BedTable, IntervalRecord
+from centrodip.bedtable import BedTable, IntervalRecord
 
 
 def _normalise_interval(start: int, end: int) -> Tuple[float, float]:

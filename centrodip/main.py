@@ -7,12 +7,12 @@ import argparse
 import concurrent.futures
 
 from pathlib import Path
-from bedtable import BedTable
 
-import bedmethyl_smooth as bms
-import detect_dips as dd
-import filter_dips as fd
-import summary_plot as pd
+from centrodip.bedtable import BedTable
+import centrodip.bedmethyl_smooth as bms
+import centrodip.detect_dips as dd
+import centrodip.filter_dips as fd
+import centrodip.summary_plot as pd
 
 
 def _process_chrom(item):

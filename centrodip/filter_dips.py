@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, Mapping, Sequence, List, Tuple
 import numpy as np
 
-from bedtable import BedTable
+from centrodip.bedtable import BedTable
 
 
 def filterDips(

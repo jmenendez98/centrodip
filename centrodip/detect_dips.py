@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 from scipy import signal
 
-from bedtable import BedTable, IntervalRecord
+from centrodip.bedtable import BedTable, IntervalRecord
 
 
 def detectDips(
@@ -95,13 +95,14 @@ def detectDips(
 
     # get half-point edges using dip_centers, smoothed, and background median
     dip_regions, halfpoint_idxs = find_edges(
-        chrom_for_output,
-        smoothed,
-        positions,
-        background_stats["median"],
-        dip_center_idxs,
-        label,
-        color
+        chrom = chrom_for_output,
+        smoothed = smoothed,
+        positions = positions,
+        background_median = background_stats["median"],
+        dip_center_idxs = dip_center_idxs,
+        width = broadness,
+        label = label,
+        color = color
     )
 
     return dip_regions, background_stats
@@ -281,7 +282,7 @@ def find_edges(
     label: str,
     color: str, 
     *,
-    alpha: float = 0.5,
+    width: float = 0.5,
     min_depth: float = 0.0,
     k_consecutive: int = 1,
     end_inclusive: bool = True,
@@ -341,7 +342,7 @@ def find_edges(
         depth = float(background_median - y0)
         if depth < min_depth:
             continue
-        level = float(y0 + alpha * depth)
+        level = float(y0 + width * depth)
         li = _scan_left(c, level)
         ri = _scan_right(c, level)
         if ri <= li:
