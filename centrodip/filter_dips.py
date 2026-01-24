@@ -60,7 +60,7 @@ def clusterFilter(
     x = (starts + ends) // 2
     # within window if |xj - xi| <= cluster_distance
     def within(j: int, i: int) -> bool:
-        return abs(int(x[j]) - int(x[i])) <= (cluster_distance // 2)
+        return abs(int(x[j]) - int(x[i])) <= cluster_distance
 
     # Helper: expand window around i using two pointers (since sorted)
     def neighborhood_indices(i: int) -> Tuple[int, int]:

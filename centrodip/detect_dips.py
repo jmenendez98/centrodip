@@ -348,7 +348,27 @@ def find_edges(
         if ri <= li:
             continue
         halfpoint_idxs.append((li, ri))
+
     halfpoint_idxs = list(dict.fromkeys(tuple(x) for x in halfpoint_idxs)) # de-duplicate 
+
+    # --- merge overlapping / touching index intervals ---
+    if halfpoint_idxs:
+        # sort by left index, then right
+        halfpoint_idxs.sort(key=lambda x: (x[0], x[1]))
+
+        merged: List[Tuple[int, int]] = []
+        cur_l, cur_r = halfpoint_idxs[0]
+
+        for l, r in halfpoint_idxs[1:]:
+            # overlap or touch?
+            if l <= cur_r:
+                cur_r = max(cur_r, r)
+            else:
+                merged.append((cur_l, cur_r))
+                cur_l, cur_r = l, r
+
+        merged.append((cur_l, cur_r))
+        halfpoint_idxs = merged
 
     # --- 2) compute raw scores per region ---
     raw_scores: List[float] = []

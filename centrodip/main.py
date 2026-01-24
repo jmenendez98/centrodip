@@ -102,7 +102,7 @@ def main():
     dip_detect_group.add_argument(
         "--prominence",
         type=float,
-        default=0.25,
+        default=0.5,
         help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.25)",
     )
     dip_detect_group.add_argument(
@@ -114,7 +114,7 @@ def main():
     dip_detect_group.add_argument(
         "--broadness",
         type=float,
-        default=0.5,
+        default=0.75,
         help="Broadness of dips called. Higher values make broader entries. Must be a float between 0 and 1. (default: 0.5)",
     )
     dip_detect_group.add_argument(
@@ -134,7 +134,7 @@ def main():
     dip_filter_group.add_argument(
         "--min-score",
         type=float,
-        default=100,
+        default=500,
         help="Minimum score that a dip must have to be kept. Must be an int between 0 and 1000.  (default: 100)",
     )
     dip_filter_group.add_argument(
@@ -264,6 +264,7 @@ def main():
                     print(f"Writing summary plot to: {plot_path}")
                 pd.centrodipSummaryPlot_bedtable(
                     bedMethyl=bm_chr,              # plot only this chrom
+                    regions=regions,
                     lowess_bg=bedGraph_LOWESS,
                     dips_unfiltered=dips,
                     dips_final=filtered_dips,

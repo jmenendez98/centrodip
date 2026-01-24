@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+from centrodip.bedtable import BedTable, IntervalRecord
 
 
 def bedMethyl_LOWESS(
-    bedMethyl: "BedTable",
+    bedMethyl: BedTable,
     *,
     window_bp: int,
     cov_conf: float,
@@ -12,7 +13,7 @@ def bedMethyl_LOWESS(
     cov_col_1based: int = 10,
     x_mode: str = "start",          # "start" or "midpoint"
     drop_nonfinite: bool = True,    # if True, rows with NaN y/x are removed from output
-) -> "BedTable":
+) -> BedTable:
     """
     LOWESS with tricube distance kernel on an already-sorted BedTable.
 
@@ -27,7 +28,6 @@ def bedMethyl_LOWESS(
     - If drop_nonfinite=True, non-finite y/x rows are excluded from BOTH the fit and output.
       If False, they remain in output with NaN extras (and are skipped in fitting windows).
     """
-    from bedtable import BedTable, IntervalRecord
 
     def _cov_to_weights(coverage, cov_conf, decay_rate: float = 5.0):
         coverage = np.asarray(coverage, dtype=float)
