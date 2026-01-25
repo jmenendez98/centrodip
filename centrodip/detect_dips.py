@@ -89,7 +89,6 @@ def detectDips(
     # estimate out of CDR methylation 
     background_stats = estimate_background_from_masked(
         smoothed=smoothed,
-        positions=positions,
         masked_regions=simple_idxs,
     )
 
