@@ -224,7 +224,6 @@ def find_simple_edges(
 
 def estimate_background_from_masked(
     smoothed: np.ndarray,
-    positions: np.ndarray,
     masked_regions: list[tuple[int, int]],
 ):
     """
@@ -234,8 +233,6 @@ def estimate_background_from_masked(
     ----------
     smoothed : array
         Smoothed methylation values (ordered).
-    positions : array
-        Genomic positions corresponding to smoothed.
     masked_regions : list of (start_pos, end_pos)
         Regions to exclude (CDRs/dips).
 
@@ -256,7 +253,11 @@ def estimate_background_from_masked(
             continue
         mask[l : r + 1] = False
 
-        good = mask & np.isfinite(smoothed)
+    good = mask & np.isfinite(smoothed)
+
+    # optional safety: if everything got masked, fall back to any finite points
+    if not np.any(good):
+        good = np.isfinite(smoothed)
 
     bg_vals = smoothed[good]
 
