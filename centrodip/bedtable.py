@@ -51,7 +51,7 @@ def _coerce_field(token: str) -> Any:
     return token
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class IntervalRecord:
     """
     Represents one BED/bedGraph line.

@@ -46,7 +46,7 @@ grep "active_hor" $CENSAT > $ACTIVE_ALPHA
 bedtools merge -d 100000 $ACTIVE_ALPHA > $regions
 ```
 
-### Running `centrodip`:
+## Running `centrodip`:
 ```
 centrodip $bedMethyl $regions $output
 ```
@@ -62,6 +62,7 @@ Default output file is a `BED` file with 9 columns
  - Column 9 can be adjusted with the `--color` flag
  - The `--debug` flag adds chromosomal summary printouts and additional outputs like smoothed methylation, and unfiltered dip calls
  - The `--plot` flag creates a folder that contains summary png files for each chromosome
+
 
 ## Help Documentation
 ```
