@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="centrodip",
-    version="0.0.1",
+    version="1.0.0",
     description="Find hypomethylated regions in centromeres",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -18,10 +18,11 @@ setup(
     install_requires=[
         "numpy>=1.21.5",
         "scipy>=1.7.3",
+        "matplotlib>=3.5.1"
     ],
     entry_points={
         "console_scripts": [
-            "centrodip=centrodip.centrodip:main",
+            "centrodip=centrodip.main:main",
         ]
     },
     classifiers=[
