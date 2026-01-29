@@ -8,10 +8,33 @@ from centrodip.bedtable import BedTable
 
 def filterDips(
     dips: BedTable,
+    regions: BedTable,
     min_size: int,
     min_score: float,
     cluster_distance: int,
 ) -> BedTable:
+
+    # region span filter - keep only dips that are entirely within a single region
+    if regions is not None and len(regions._records) > 0:
+        filtered_recs = []
+        for dip_rec in dips._records:
+            dip_chrom = dip_rec.chrom
+            dip_start = dip_rec.start
+            dip_end = dip_rec.end
+
+            # Check if dip is within any region
+            within_region = False
+            for region_rec in regions._records:
+                if region_rec.chrom != dip_chrom:
+                    continue
+                if region_rec.start <= dip_start and dip_end <= region_rec.end:
+                    within_region = True
+                    break
+
+            if within_region:
+                filtered_recs.append(dip_rec)
+
+        dips = BedTable(filtered_recs, inferred_kind="bed", inferred_ncols=6)
 
     # size filter - remove dip regions smaller than min_size
     # convert back to BedTable
