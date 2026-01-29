@@ -117,6 +117,23 @@ def test_clusterFilter_tie_breaker_prefers_more_members_then_span_then_earlier_s
         (1_020_000, 1_021_000),
     ]
 
+def test_filter_dips_crossing_region_gaps_drops_spanning_dip():
+    regions = BedTable([
+        IntervalRecord("chr1", 100, 200),
+        IntervalRecord("chr1", 300, 400),
+    ], inferred_kind="bed", inferred_ncols=3)
+
+    dips = BedTable([
+        IntervalRecord("chr1", 150, 180, name="ok1", score=900, strand="."),
+        IntervalRecord("chr1", 320, 350, name="ok2", score=900, strand="."),
+        IntervalRecord("chr1", 150, 350, name="BAD", score=900, strand="."),  # spans 200-300 gap
+    ], inferred_kind="bed", inferred_ncols=6)
+
+    out = filter_dips_crossing_region_gaps(dips, regions)
+    names = [r.name for r in out._records]
+    assert "BAD" not in names
+    assert set(names) == {"ok1", "ok2"}
+
 
 def test_clusterFilter_require_min_members_filters_out_small_clusters():
     dips = _bt(
