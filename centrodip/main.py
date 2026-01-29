@@ -22,8 +22,8 @@ def _process_chrom(item):
         bm_chr,
         window_bp=argsd["window_size"],
         cov_conf=argsd["cov_conf"],
-        y_col_1based=11,
-        cov_col_1based=10,
+        y_col_1based=11 if not argsd["bedgraph"] else 7,
+        cov_col_1based=10 if not argsd["bedgraph"] else None,
     )
 
     dips, lowess_bg_stats = dd.detectDips(
@@ -81,7 +81,13 @@ def main():
         "--mod-code",
         type=str,
         default="m",
-        help='Modification code to filter bedMethyl file. Selects rows with this as fourth column value. (default: "m")',
+        help='Modification code to filter bedMethyl file. Selects rows with this value in the fourth column. (default: "m")',
+    )
+    parsing_group.add_argument(
+        "--bedgraph",
+        action="store_true",
+        default=False,
+        help='Input file in a bedGraph format rather than bedMethyl. Requires bedGraph4 with the fourth column being fraction modified (default: False)',
     )
 
     smoothing_group = parser.add_argument_group('Smoothing Options')
@@ -94,7 +100,7 @@ def main():
     smoothing_group.add_argument(
         "--cov-conf",
         type=int,
-        default=1,
+        default=10,
         help="Minimum coverage required to be a confident CpG site. (default: 10)",
     )
 
@@ -103,25 +109,25 @@ def main():
         "--prominence",
         type=float,
         default=0.5,
-        help="Sensitivity of dip detection. Must be a float between 0 and 1. Higher values require more pronounced dips. (default: 0.25)",
+        help="Sensitivity of dip detection for scipy.signal.find_peaks. Higher values require more pronounced dips. Must be a float between 0 and 1. (default: 0.5)",
     )
     dip_detect_group.add_argument(
         "--height",
         type=float,
         default=0.1,
-        help="Height for dip detection. Lower values filter more dips. Must be a float between 0 and 1. (default: 0.1)",
+        help="Minimum depth for dip detection, lower values require deeper dips. Must be a float between 0 and 1. (default: 0.1)",
     )
     dip_detect_group.add_argument(
         "--broadness",
         type=float,
         default=0.75,
-        help="Broadness of dips called. Higher values make broader entries. Must be a float between 0 and 1. (default: 0.5)",
+        help="Broadness of dips called, higher values make broader entries. Must be a float between 0 and 1. (default: 0.75)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
         action="store_true",
         default=False,
-        help="Find regions enriched (rather than depleted) for methylation.",
+        help="Find regions that are enriched (rather than depleted) for methylation. (default: False)",
     )
 
     dip_filter_group = parser.add_argument_group('Filtering Options')
@@ -135,7 +141,7 @@ def main():
         "--min-score",
         type=float,
         default=500,
-        help="Minimum score that a dip must have to be kept. Must be an int between 0 and 1000.  (default: 100)",
+        help="Minimum score that a dip must have to be kept. Must be an int between 0 and 1000.  (default: 500)",
     )
     dip_filter_group.add_argument(
         "--cluster-distance",
@@ -160,6 +166,12 @@ def main():
 
     other_arguments_group = parser.add_argument_group('Other Options')
     other_arguments_group.add_argument(
+        "--plot",
+        action="store_true",
+        default=False,
+        help="Create summary plot of the results. Written to <output_prefix>.summary.png (default: False)",
+    )
+    other_arguments_group.add_argument(
         "--threads",
         type=int,
         default=4,
@@ -170,12 +182,6 @@ def main():
         action="store_true",
         default=False,
         help="Dumps smoothed methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
-    )
-    other_arguments_group.add_argument(
-        "--plot",
-        action="store_true",
-        default=False,
-        help="Create summary plot of the results. Written to <output_prefix>.summary.png (default: False)",
     )
 
     args = parser.parse_args()
@@ -207,6 +213,8 @@ def main():
         overlapping_records,
         inferred_kind=bedMethyl.inferred_kind,
     )
+    if not args.bedgraph:
+        bedMethyl_in_region = bedMethyl_in_region.filter(lambda r: r.name == args.mod_code)
 
     out_path = Path(args.output)
     plot_dir = out_path.parent / f"{out_path.stem}_plots"
@@ -214,6 +222,8 @@ def main():
         plot_dir.mkdir(parents=True, exist_ok=True)
 
     argsd = {
+        "mod_code": args.mod_code,
+        "bedgraph": args.bedgraph,
         "window_size": args.window_size,
         "cov_conf": args.cov_conf,
         "prominence": args.prominence,
@@ -246,18 +256,18 @@ def main():
     all_dips = []
     all_filtered = []
     all_bg_stats = {}  
-    
-    with concurrent.futures.ProcessPoolExecutor() as ex:
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.threads) as ex:
         futures = [ex.submit(_process_chrom, item) for item in work_items]
 
         for fut in concurrent.futures.as_completed(futures):
             chrom, bm_chr, bedGraph_LOWESS, dips, filtered_dips, lowess_bg_stats, debug_msg, plot_path = fut.result()
 
-            # Debug printing (main process so logs aren't interleaved as badly)
+            # debug printing (main process so logs aren't interleaved as badly)
             if debug_msg:
                 print(debug_msg, end="")
 
-            # Plotting (do this in main process to avoid matplotlib multiprocessing issues)
+            # plotting (do this in main process to avoid matplotlib multiprocessing issues)
             if args.plot and plot_path is not None:
                 Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
                 if args.debug:

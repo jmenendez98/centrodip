@@ -51,7 +51,10 @@ def bedMethyl_LOWESS(
         raise ValueError("x_mode must be 'start' or 'midpoint'")
 
     y_all = np.asarray(bedMethyl.get_column_1based(y_col_1based, as_float=True), dtype=float)
-    c_all = np.asarray(bedMethyl.get_column_1based(cov_col_1based, as_float=True), dtype=float)
+    if cov_col_1based is None:
+        c_all = np.full(len(rows), cov_conf, dtype=float)
+    else:
+        c_all = np.asarray(bedMethyl.get_column_1based(cov_col_1based, as_float=True), dtype=float)
 
     finite_mask = np.isfinite(x_all) & np.isfinite(y_all)
     if drop_nonfinite:

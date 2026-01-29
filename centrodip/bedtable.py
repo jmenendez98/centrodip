@@ -62,17 +62,31 @@ class IntervalRecord:
     chrom: str
     start: int
     end: int
-
     name: Optional[str] = None
     score: Optional[Union[int, float]] = None
-    strand: Optional[str] = None  # '+', '-', '.', or None
-    extras: Tuple[Any, ...] = ()
+    strand: Optional[str] = None
+    extras: Optional[Tuple[Any, ...]] = None
 
-    def __post_init__(self) -> None:
-        if self.start < 0 or self.end < 0:
-            raise ValueError(f"start/end must be >= 0: {self}")
-        if self.end < self.start:
-            raise ValueError(f"end must be >= start: {self}")
+    def __init__(
+        self,
+        chrom: str,
+        start: int,
+        end: int,
+        name: Optional[str] = None,
+        score: Optional[Union[int, float]] = None,
+        strand: Optional[str] = None,
+        extras: Optional[Tuple[Any, ...]] = None,
+    ) -> None:
+        object.__setattr__(self, "chrom", chrom)
+        object.__setattr__(self, "start", start)
+        object.__setattr__(self, "end", end)
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "score", score)
+        object.__setattr__(self, "strand", strand)
+        object.__setattr__(self, "extras", extras)
+
+        if self.start < 0 or self.end < 0 or self.end < self.start:
+            raise ValueError(f"Invalid interval coordinates: {self}")
 
     @property
     def length(self) -> int:
@@ -87,9 +101,6 @@ class IntervalRecord:
         columns: Sequence[str] = ("chrom", "start", "end", "name", "score", "strand"),
         missing: str = ".",
     ) -> List[str]:
-        """
-        Serialize using a chosen column order; extras appended after known columns if included.
-        """
         out: List[str] = []
         for col in columns:
             if col == "chrom":
@@ -105,9 +116,13 @@ class IntervalRecord:
             elif col == "strand":
                 out.append(self.strand if self.strand is not None else missing)
             elif col == "extras":
-                out.extend(str(x) for x in self.extras)
+                if self.extras is None:
+                    out.append(missing)
+                else:
+                    out.extend(str(x) if x is not None else missing for x in self.extras)
             else:
                 raise ValueError(f"Unknown column spec: {col}")
+
         return out
 
     def get_col_1based(self, col: int):
@@ -142,6 +157,8 @@ class IntervalRecord:
             return self.strand
         else:
             idx = col - 7
+            if self.extras is None:
+                return None
             if idx < 0 or idx >= len(self.extras):
                 return None
             return self.extras[idx]
@@ -199,7 +216,7 @@ class BedTable:
         allow_spaces: bool = True,
         coerce_extras: bool = True,
         strict: bool = False,
-    ) -> "BedTable":
+    ) -> BedTable:
         """
         Read BED / bedGraph.
 
@@ -331,6 +348,7 @@ class BedTable:
         Write out to BED-like text. If you want a canonical BED6, pass columns.
         """
         path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         cols = list(columns) if columns is not None else ["chrom", "start", "end"]
 
         # Include name/score/strand automatically if present in any record
@@ -367,7 +385,7 @@ class BedTable:
                 fields = r.to_bed_fields(columns=cols, missing=missing)
                 out.write(delimiter.join(fields) + "\n")
 
-    def filter(self, predicate: Callable[[IntervalRecord], bool]) -> "BedTable":
+    def filter(self, predicate: Callable[[IntervalRecord], bool]) -> BedTable:
         """Return a new BedTable with records where predicate(record) is True."""
         return BedTable(
             (r for r in self._records if predicate(r)),
@@ -379,11 +397,11 @@ class BedTable:
             inferred_ncols=self.inferred_ncols,
         )
 
-    def subset_region(self, chrom: str, start: int, end: int) -> "BedTable":
+    def subset_region(self, chrom: str, start: int, end: int) -> BedTable:
         """Return records overlapping [start, end) on chrom."""
         return self.filter(lambda r: r.overlaps(chrom, start, end))
 
-    def sort(self, *, by: str = "coord", reverse: bool = False) -> "BedTable":
+    def sort(self, *, by: str = "coord", reverse: bool = False) -> BedTable:
         """
         by:
           - "coord": chrom, start, end
@@ -412,7 +430,7 @@ class BedTable:
             inferred_ncols=self.inferred_ncols,
         )
 
-    def groupby_chrom(self) -> Dict[str, "BedTable"]:
+    def groupby_chrom(self) -> Dict[str, BedTable]:
         """Return dict chrom -> BedTable for that chrom."""
         out: Dict[str, List[IntervalRecord]] = {}
         for r in self._records:

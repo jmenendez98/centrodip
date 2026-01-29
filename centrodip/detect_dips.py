@@ -51,7 +51,7 @@ def detectDips(
     # -------------------------
     rows = list(bedgraph)
     if not rows:
-        return {"starts": [], "ends": []}, []
+        return BedTable([], inferred_kind="bed", inferred_ncols=6), {}
 
     # Ensure we're operating per-chromosome (this function assumes one chrom at a time)
     chroms = {r.chrom for r in rows}
@@ -157,7 +157,7 @@ def find_simple_edges(
     data = np.asarray(data, dtype=float)
     n = data.size
     if n == 0:
-        return []
+        return BedTable([], inferred_kind="bed", inferred_ncols=6), []
 
     edges: List[Tuple[int, int]] = []
 

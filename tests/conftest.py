@@ -3,37 +3,30 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
-from typing import Callable, Dict
+from typing import Dict, Any
 from urllib.error import ContentTooShortError, HTTPError, URLError
 import urllib.request
 
 import pytest
 
+from centrodip.bedtable import BedTable
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from centrodip.load_data import DataHandler
-
+# Remote datasets: keep the URLs, keep "type" as metadata (NOT a URL).
 REMOTE_DATASETS: Dict[str, Dict[str, str]] = {
     "chm13_chr1": {
-        "bedmethyl": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/CHM13_ONT_dorado.5mC_pileup.bed",
-        "regions": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/CHM13v2.0_ONT_5mC.chr1.bed",
+        "bedmethyl": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/CHM13v2.0_ONT_5mC.chr1.H1L.bedgraph",
+        "regions": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/chm13v2.0.cenSatv2.1.chr1.H1L.bed",
+        "type": "bedgraph",
     },
-    "hg002_chrX": {
-        "bedmethyl": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/HG002v1.1_Q100_ONT_5mC.H1L.chrX.bed",
-        "regions": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/hg002v1.1.cenSatv2.0.chrX.H1L.bed",
+    "hg002_chrXY": {
+        "bedmethyl": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/HG002v1.1_Q100_ONT_5mC.chrXY.test.pileup.bed",
+        "regions": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/hg002v1.1.cenSatv2.0.chrXY.H1L.bed",
+        "type": "bedmethyl",
     },
-    "hg002_chrY": {
-        "bedmethyl": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/HG002v1.1_Q100_ONT_5mC.chrY.bed",
-        "regions": "https://public.gi.ucsc.edu/~jmmenend/.centrodip_test_data/hg002v1.1.cenSatv2.0.chrY.H1L.bed",
-    },
-}
-
-EXPECTED_CHROMS: Dict[str, str] = {
-    "chm13_chr1": "chr1",
-    "hg002_chrX": "chrX_MATERNAL",
-    "hg002_chrY": "chrY_PATERNAL",
 }
 
 
@@ -54,41 +47,35 @@ def _download_file(url: str, destination: Path) -> Path:
 
     return destination
 
-@pytest.fixture(scope="session")
-def bed_parser(test_data_dir: Path) -> DataHandler:
-    return DataHandler(
-        regions_path=test_data_dir / "censat_test.bed",
-        methylation_path=test_data_dir / "bedmethyl_test.bed",
-        mod_code="m",
-    )
-
-@pytest.fixture()
-def data_handler_factory() -> Callable[..., DataHandler]:
-    def factory(*, methylation_path: Path | str, regions_path: Path | str, **overrides) -> DataHandler:
-        return DataHandler(
-            regions_path=regions_path,
-            methylation_path=methylation_path,
-            mod_code="m",
-        )
-
-    return factory
 
 @pytest.fixture(scope="session")
-def test_data_dir() -> Path:
-    return Path(__file__).parent / "data"
+def remote_dataset_paths(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Dict[str, Any]]:
+    """
+    Downloads test datasets once per test session.
 
-@pytest.fixture(scope="session")
-def remote_dataset_paths(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Dict[str, Path]]:
+    Returns:
+      dict like:
+        {
+          "chm13_chr1": {
+              "bedmethyl": Path(...),
+              "regions": Path(...),
+              "type": "bedgraph",
+          },
+          ...
+        }
+    """
     base_dir = tmp_path_factory.mktemp("centrodip_remote_data")
-    datasets: Dict[str, Dict[str, Path]] = {}
+    datasets: Dict[str, Dict[str, Any]] = {}
     failures: Dict[str, Exception] = {}
 
-    for dataset_key, urls in REMOTE_DATASETS.items():
+    for dataset_key, spec in REMOTE_DATASETS.items():
         dataset_dir = base_dir / dataset_key
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        dataset_paths: Dict[str, Path] = {}
+
+        dataset_paths: Dict[str, Any] = {"type": spec.get("type", "bedmethyl")}
         try:
-            for label, url in urls.items():
+            for label in ("bedmethyl", "regions"):
+                url = spec[label]
                 destination = dataset_dir / Path(url).name
                 dataset_paths[label] = _download_file(url, destination)
         except Exception as exc:  # pragma: no cover - network dependent
@@ -102,3 +89,65 @@ def remote_dataset_paths(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, 
         pytest.skip(f"Unable to download remote datasets: {reason}")
 
     return datasets
+
+
+@pytest.fixture(scope="session")
+def remote_bedtables(remote_dataset_paths: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, BedTable]]:
+    """
+    Loads remote datasets into BedTable objects once.
+    """
+    out: Dict[str, Dict[str, BedTable]] = {}
+    for key, ds in remote_dataset_paths.items():
+        out[key] = {
+            "bedmethyl": BedTable.from_path(ds["bedmethyl"]),
+            "regions": BedTable.from_path(ds["regions"]),
+        }
+    return out
+
+
+@pytest.fixture()
+def mpl_agg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Force matplotlib headless backend for plot tests.
+    """
+    monkeypatch.setenv("MPLBACKEND", "Agg")
+    monkeypatch.setenv("DISPLAY", "")
+
+
+@pytest.fixture()
+def run_main_no_parallel(monkeypatch: pytest.MonkeyPatch):
+    """
+    Run centrodip.main.main() inline, forcing no multiprocessing.
+    Also patches ProcessPoolExecutor so code paths using it still work.
+    """
+    import concurrent.futures
+
+    class _InlineExecutor:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, *args, **kwargs):
+            f = concurrent.futures.Future()
+            try:
+                f.set_result(fn(*args, **kwargs))
+            except BaseException as e:
+                f.set_exception(e)
+            return f
+
+    def _run(argv):
+        import centrodip.main as cmain
+
+        # patch the executor used by centrodip.main
+        monkeypatch.setattr(concurrent.futures, "ProcessPoolExecutor", _InlineExecutor)
+
+        # run with patched argv
+        monkeypatch.setattr(sys, "argv", ["centrodip"] + [str(a) for a in argv])
+        cmain.main()
+
+    return _run
