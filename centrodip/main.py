@@ -3,6 +3,7 @@
 import os
 import sys
 import argparse
+from importlib.metadata import version, PackageNotFoundError
 
 import concurrent.futures
 
@@ -184,8 +185,22 @@ def main():
         default=False,
         help="Dumps smoothed methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
     )
+    other_arguments_group.add_argument(
+        "--version",
+        action="version",
+        version=f"centrodip {version('centrodip')}"
+    )
 
     args = parser.parse_args()
+
+    # print version if --version is passed in
+    if args.version:
+        try:
+            v = version("centrodip")
+        except PackageNotFoundError:
+            v = "unknown"
+        print(f"centrodip version: {v}")
+        return
 
     # -------------------------
     # Load files

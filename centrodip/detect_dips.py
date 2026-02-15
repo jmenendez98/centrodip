@@ -126,12 +126,14 @@ def find_dip_centers(
             smoothed_methylation,
             prominence=data_prominence_threshold,
             height=np.percentile(smoothed_methylation, q=(1-height)*100),
+            wlen=len(smoothed_methylation)
         )
     else:
         centers, _ = signal.find_peaks(
             -smoothed_methylation,
             prominence=data_prominence_threshold,
             height=-np.percentile(smoothed_methylation, q=(height)*100),
+            wlen=len(smoothed_methylation)
         )
 
     return centers.astype(int)
