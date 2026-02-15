@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="centrodip",
-    version="1.0.0",
+    version="1.0.1",
     description="Find hypomethylated regions in centromeres",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",

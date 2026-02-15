@@ -3,6 +3,7 @@
 import os
 import sys
 import argparse
+from importlib.metadata import version, PackageNotFoundError
 
 import concurrent.futures
 
@@ -16,7 +17,7 @@ import centrodip.summary_plot as pd
 
 
 def _process_chrom(item):
-    chrom, bm_chr, argsd = item
+    chrom, bm_chr, r_chr, argsd = item
 
     bedGraph_LOWESS = bms.bedMethyl_LOWESS(
         bm_chr,
@@ -38,6 +39,7 @@ def _process_chrom(item):
 
     filtered_dips = fd.filterDips(
         dips=dips,
+        regions=r_chr,
         min_size=argsd["min_size"],
         min_score=argsd["min_score"],
         cluster_distance=argsd["cluster_distance"],
@@ -183,8 +185,22 @@ def main():
         default=False,
         help="Dumps smoothed methylation values, their derivatives, methylation peaks, and derivative peaks. Each to separate BED/BEDGraph files. (default: False)",
     )
+    other_arguments_group.add_argument(
+        "--version",
+        action="version",
+        version=f"centrodip {version('centrodip')}"
+    )
 
     args = parser.parse_args()
+
+    # print version if --version is passed in
+    if args.version:
+        try:
+            v = version("centrodip")
+        except PackageNotFoundError:
+            v = "unknown"
+        print(f"centrodip version: {v}")
+        return
 
     # -------------------------
     # Load files
@@ -243,14 +259,18 @@ def main():
     chrom_map = bedMethyl_in_region.groupby_chrom()  # should be dict-like: chrom -> BedTable or list[IntervalRecord]
 
     work_items = []
-    for chrom, chrom_records in chrom_map.items():
+    for chrom in chrom_map.keys():
+        chrom_records = chrom_map[chrom]
+        region_records = regions_by_chrom[chrom]
         # If groupby_chrom returns lists of records, wrap into BedTable
         if isinstance(chrom_records, BedTable):
             bm_chr = chrom_records
+            r_chr = region_records
         else:
             bm_chr = BedTable(list(chrom_records), inferred_kind=bedMethyl_in_region.inferred_kind)
+            r_chr = BedTable(list(region_records), inferred_kind=regions.inferred_kind)
 
-        work_items.append((chrom, bm_chr, argsd))
+        work_items.append((chrom, bm_chr, r_chr, argsd))
 
     all_lowess = []
     all_dips = []

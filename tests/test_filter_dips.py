@@ -24,7 +24,8 @@ def _rec(chrom: str, start: int, end: int, score: int | None) -> IntervalRecord:
 
 def test_filterDips_empty_returns_empty():
     dips = _bt()
-    out = filterDips(dips, min_size=1000, min_score=100, cluster_distance=500_000)
+    regions = _bt()
+    out = filterDips(dips, regions, min_size=1000, min_score=100, cluster_distance=500_000)
     assert isinstance(out, BedTable)
     assert len(out._records) == 0
 
@@ -34,7 +35,10 @@ def test_filterDips_size_filter_removes_small():
         _rec("chr1", 0, 500, 200),      # len 500 -> removed
         _rec("chr1", 1000, 2500, 200),  # len 1500 -> kept
     )
-    out = filterDips(dips, min_size=1000, min_score=0, cluster_distance=-1)
+    regions = _bt(
+        _rec("chr1", 0, 3000, None),     # region covering both dips
+    )
+    out = filterDips(dips, regions, min_size=1000, min_score=0, cluster_distance=-1)
     assert [(r.start, r.end) for r in out._records] == [(1000, 2500)]
 
 
@@ -44,7 +48,10 @@ def test_filterDips_score_filter_removes_low_and_none_scores():
         _rec("chr1", 3000, 5000, 99),  # removed (<100)
         _rec("chr1", 6000, 9000, 100), # kept
     )
-    out = filterDips(dips, min_size=0, min_score=100, cluster_distance=-1)
+    regions = _bt(
+        _rec("chr1", 0, 10_000, None),  #
+    )
+    out = filterDips(dips, regions, min_size=0, min_score=100, cluster_distance=-1)
     assert [(r.start, r.end, r.score) for r in out._records] == [(6000, 9000, 100)]
 
 
@@ -57,7 +64,10 @@ def test_filterDips_clusterFilter_applied_after_other_filters():
         _rec("chr1", 1_010_000, 1_011_000, 200),  # cluster B
         _rec("chr1", 1_020_000, 1_021_000, 200),  # cluster B
     )
-    out = filterDips(dips, min_size=0, min_score=0, cluster_distance=50_000)
+    regions = _bt(
+        _rec("chr1", 0, 2_000_000, None),
+    )
+    out = filterDips(dips, regions, min_size=0, min_score=0, cluster_distance=50_000)
     # Expect cluster A chosen (mean 800 > 200)
     assert [(r.start, r.end) for r in out._records] == [(0, 1000), (10_000, 11_000)]
 
@@ -116,6 +126,23 @@ def test_clusterFilter_tie_breaker_prefers_more_members_then_span_then_earlier_s
         (1_010_000, 1_011_000),
         (1_020_000, 1_021_000),
     ]
+
+def test_filter_dips_crossing_region_gaps_drops_spanning_dip():
+    regions = BedTable([
+        IntervalRecord("chr1", 100, 200),
+        IntervalRecord("chr1", 300, 400),
+    ], inferred_kind="bed", inferred_ncols=3)
+
+    dips = BedTable([
+        IntervalRecord("chr1", 150, 180, name="ok1", score=900, strand="."),
+        IntervalRecord("chr1", 320, 350, name="ok2", score=900, strand="."),
+        IntervalRecord("chr1", 150, 350, name="BAD", score=900, strand="."),  # spans 200-300 gap
+    ], inferred_kind="bed", inferred_ncols=6)
+
+    out = filterDips(dips, regions, 1, 100, 1000)
+    names = [r.name for r in out._records]
+    assert "BAD" not in names
+    assert set(names) == {"ok1", "ok2"}
 
 
 def test_clusterFilter_require_min_members_filters_out_small_clusters():
