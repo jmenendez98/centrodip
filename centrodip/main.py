@@ -148,8 +148,8 @@ def main():
     dip_filter_group.add_argument(
         "--cluster-distance",
         type=int,
-        default=500000,
-        help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: 500000)",
+        default=-1,
+        help="Cluster distance in base pairs. Attempts to keep the single largest cluster of annotationed dips. Negative Values turn it off. (default: -1)",
     )
 
     output_group = parser.add_argument_group('Output Options')
