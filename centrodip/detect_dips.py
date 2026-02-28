@@ -391,23 +391,9 @@ def find_edges(
 
     raw_arr = np.asarray(raw_scores, dtype=float)
     finite_raw = raw_arr[np.isfinite(raw_arr) & (raw_arr > 0)]
-    # robust scale: map the score_q quantile to 1000
-    if finite_raw.size == 0:
-        scale = 1.0
-    else:
-        scale = float(np.quantile(finite_raw, 0.95))
-        if scale <= 0 or not np.isfinite(scale):
-            scale = float(finite_raw.max()) if finite_raw.size else 1.0
-            if scale <= 0 or not np.isfinite(scale):
-                scale = 1.0
 
-    def _to_bed_score(s: float) -> int:
-        if not np.isfinite(s) or s <= 0:
-            return 0
-        v = int(round(1000.0 * (s / scale)))
-        return max(0, min(1000, v))
-
-    bed_scores = [_to_bed_score(s) for s in raw_arr]
+    # normalize those scores to 0-1000 for BED output
+    bed_scores = [1000*(s/background_median) for s in raw_arr]
 
     # --- 3) build BedTable output with scores 0-1000 ---
     out: List[IntervalRecord] = []

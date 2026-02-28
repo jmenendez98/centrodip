@@ -299,9 +299,9 @@ def main():
             all_bg_stats[chrom] = lowess_bg_stats
 
     # ---- Concatenate into single BedTables ----
-    bedGraph_LOWESS_all = BedTable(all_lowess, inferred_kind="bedgraph", inferred_ncols=4)
-    dips_all = BedTable(all_dips, inferred_kind="bed", inferred_ncols=6)
-    filtered_dips_all = BedTable(all_filtered, inferred_kind="bed", inferred_ncols=6)
+    bedGraph_LOWESS_all = BedTable(all_lowess, inferred_kind="bedgraph", inferred_ncols=4).sort()
+    dips_all = BedTable(all_dips, inferred_kind="bed", inferred_ncols=6).sort()
+    filtered_dips_all = BedTable(all_filtered, inferred_kind="bed", inferred_ncols=6).sort()
 
     if args.debug:
         # save smoothed bedMethyl
