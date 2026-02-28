@@ -97,7 +97,7 @@ def detectDips(
         chrom = chrom_for_output,
         smoothed = smoothed,
         positions = positions,
-        background_median = background_stats["median"],
+        background_stats = background_stats,
         dip_center_idxs = dip_center_idxs,
         width = broadness,
         label = label,
@@ -279,7 +279,7 @@ def find_edges(
     chrom: str,
     smoothed: np.ndarray,
     positions: np.ndarray,
-    background_median: float,
+    background_stats: dict,
     dip_center_idxs: np.ndarray,
     label: str,
     color: str, 
@@ -305,7 +305,7 @@ def find_edges(
         return [], []
     if len(positions) != n:
         raise ValueError("smoothed and positions must have the same length")
-    if not np.isfinite(background_median):
+    if not np.isfinite(background_stats["median"]):
         raise ValueError("background_median must be finite")
 
     if k_consecutive < 1:
@@ -341,7 +341,7 @@ def find_edges(
         y0 = smoothed[c]
         if not np.isfinite(y0):
             continue
-        depth = float(background_median - y0)
+        depth = float(background_stats["median"] - y0)
         if depth < min_depth:
             continue
         level = float(y0 + width * depth)
@@ -373,31 +373,35 @@ def find_edges(
         halfpoint_idxs = merged
 
     # --- 2) compute raw scores per region ---
-    raw_scores: List[float] = []
+    bg_values = background_stats["values"]
+    scores: List[float] = []
     for (l_i, r_i) in halfpoint_idxs:
         l_i = max(0, min(int(l_i), n - 1))
         r_i = max(0, min(int(r_i), n - 1))
+
         if r_i <= l_i:
             raw_scores.append(0.0)
             continue
-        win = smoothed[l_i : r_i + 1]
-        win = win[np.isfinite(win)]
-        if win.size < 3:
+
+        dip_values = smoothed[l_i : r_i + 1]
+        dip_values = dip_values[np.isfinite(dip_values)]
+
+        if dip_values.size < 3:
             raw_scores.append(0.0)
             continue
-        deficit = np.maximum(0.0, float(background_median) - win)
-        s = float(np.median(deficit))
-        raw_scores.append(s)
 
-    raw_arr = np.asarray(raw_scores, dtype=float)
-    finite_raw = raw_arr[np.isfinite(raw_arr) & (raw_arr > 0)]
+        deficit = np.maximum(0.0, float(background_stats["median"]) - dip_values)
+        s = np.mean(-np.log(np.searchsorted(np.sort(bg_values), dip_values, side="right") / len(bg_values) + 1e-12))
+        score = int(np.clip(1000 * s / 3, 0, 1000))
+        scores.append(score)
+    raw_arr = np.asarray(scores, dtype=float)
 
     # normalize those scores to 0-1000 for BED output
-    # bed_scores = [1000*(s/background_median) for s in raw_arr]
+    # bed_scores = [1000*(s/background_stats["median"]) for s in raw_arr]
 
     # i want to try an exponential-saturation like scaling
-    tau = 1.0
-    bed_scores = [int(1000 * (1 - np.exp(-s/tau))) if np.isfinite(s) and s > 0 else 0 for s in raw_arr]
+    #tau = 5.0
+    #bed_scores = [int(1000 * (1 - np.exp(-s/tau))) if np.isfinite(s) and s > 0 else 0 for s in raw_arr]
 
     # --- 3) build BedTable output with scores 0-1000 ---
     out: List[IntervalRecord] = []
