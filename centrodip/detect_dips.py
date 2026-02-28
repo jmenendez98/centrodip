@@ -393,7 +393,11 @@ def find_edges(
     finite_raw = raw_arr[np.isfinite(raw_arr) & (raw_arr > 0)]
 
     # normalize those scores to 0-1000 for BED output
-    bed_scores = [1000*(s/background_median) for s in raw_arr]
+    # bed_scores = [1000*(s/background_median) for s in raw_arr]
+
+    # i want to try an exponential-saturation like scaling
+    tau = 1.0
+    bed_scores = [int(1000 * (1 - np.exp(-s/tau))) if np.isfinite(s) and s > 0 else 0 for s in raw_arr]
 
     # --- 3) build BedTable output with scores 0-1000 ---
     out: List[IntervalRecord] = []
