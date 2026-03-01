@@ -402,6 +402,17 @@ def find_edges(
         s = np.mean(float(background_stats["median"]) - dip_values)
         score = int(np.clip(1000.0 * (1.0 - np.exp(-s / tau)), 0.0, 1000.0))
 
+        # trying to implement a sigmoid scoring function
+        # considers both depth and variability of the background
+        B = float(background_stats["median"])
+        iqr = float(background_stats["p75"] - background_stats["p25"])
+        iqr = max(iqr, 1e-6)  # prevent divide-by-zero / tiny IQR
+        s = float(np.mean(np.maximum(0.0, B - dip_values)))
+        z = s / iqr
+        z0 = 1.5   # threshold in "IQR units": z=1 => ~500
+        k  = 6.0   # steepness: higher => harsher on weak dips
+        score = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - z0))), 0.0, 1000.0))
+
         #outlier_thresh = background_stats["median"] - (1.5 * (background_stats["p75"] - background_stats["p25"]))
         #score = len(dip_values[dip_values<outlier_thresh]) / len(dip_values) * 1000
 
