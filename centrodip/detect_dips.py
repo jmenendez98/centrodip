@@ -390,18 +390,21 @@ def find_edges(
             raw_scores.append(0.0)
             continue
 
-        deficit = np.maximum(0.0, float(background_stats["median"]) - dip_values)
-        s = np.mean(-np.log(np.searchsorted(np.sort(bg_values), dip_values, side="right") / len(bg_values) + 1e-12))
-        score = int(np.clip(1000 * s / 3, 0, 1000))
+        #s = np.mean(-np.log(np.searchsorted(np.sort(bg_values), dip_values, side="right") / len(bg_values) + 1e-12))
+        #score = int(np.clip(1000 * s / 3, 0, 1000))
+
+        #deficit = np.mean(float(background_stats["median"]) - dip_values)
+        #score = 1000*(deficit/background_stats["median"])
+
+        tau = 10
+        s = np.mean(float(background_stats["median"]) - dip_values)
+        score = int(1000 * (1 - np.exp(-s/tau)))
+
+        #outlier_thresh = background_stats["median"] - (1.5 * (background_stats["p75"] - background_stats["p25"]))
+        #score = len(dip_values[dip_values<outlier_thresh]) / len(dip_values) * 1000
+
         scores.append(score)
-    raw_arr = np.asarray(scores, dtype=float)
-
-    # normalize those scores to 0-1000 for BED output
-    # bed_scores = [1000*(s/background_stats["median"]) for s in raw_arr]
-
-    # i want to try an exponential-saturation like scaling
-    #tau = 5.0
-    #bed_scores = [int(1000 * (1 - np.exp(-s/tau))) if np.isfinite(s) and s > 0 else 0 for s in raw_arr]
+    bed_scores = np.asarray(scores, dtype=float)
 
     # --- 3) build BedTable output with scores 0-1000 ---
     out: List[IntervalRecord] = []

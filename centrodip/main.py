@@ -110,8 +110,8 @@ def main():
     dip_detect_group.add_argument(
         "--prominence",
         type=float,
-        default=0.5,
-        help="Sensitivity of dip detection for scipy.signal.find_peaks. Higher values require more pronounced dips. Must be a float between 0 and 1. (default: 0.5)",
+        default=0.334,
+        help="Sensitivity of dip detection for scipy.signal.find_peaks. Higher values require more pronounced dips. Must be a float between 0 and 1. (default: 0.334)",
     )
     dip_detect_group.add_argument(
         "--height",
@@ -122,8 +122,8 @@ def main():
     dip_detect_group.add_argument(
         "--broadness",
         type=float,
-        default=0.75,
-        help="Broadness of dips called, higher values make broader entries. Must be a float between 0 and 1. (default: 0.75)",
+        default=0.9,
+        help="Broadness of dips called, higher values make broader entries. Recommended to use float between 0 and 1. (default: 0.9)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -136,13 +136,13 @@ def main():
     dip_filter_group.add_argument(
         "--min-size",
         type=int,
-        default=1000,
+        default=100,
         help="Minimum dip size in base pairs. (default: 1000)",
     )
     dip_filter_group.add_argument(
         "--min-score",
         type=float,
-        default=900,
+        default=750,
         help="Minimum score that a dip must have to be kept. Must be an int between 0 and 1000.  (default: 500)",
     )
     dip_filter_group.add_argument(
