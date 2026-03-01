@@ -142,7 +142,7 @@ def main():
     dip_filter_group.add_argument(
         "--min-score",
         type=float,
-        default=750,
+        default=500,
         help="Minimum score that a dip must have to be kept. Must be an int between 0 and 1000.  (default: 500)",
     )
     dip_filter_group.add_argument(

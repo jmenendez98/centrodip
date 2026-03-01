@@ -396,9 +396,11 @@ def find_edges(
         #deficit = np.mean(float(background_stats["median"]) - dip_values)
         #score = 1000*(deficit/background_stats["median"])
 
-        tau = 10
+        # exponential scoring with saturation, 
+        # where tau controls how quickly it saturates (higher tau = slower saturation)
+        tau = 1.5 * (background_stats["p75"] - background_stats["p25"])
         s = np.mean(float(background_stats["median"]) - dip_values)
-        score = int(1000 * (1 - np.exp(-s/tau)))
+        score = int(np.clip(1000.0 * (1.0 - np.exp(-s / tau)), 0.0, 1000.0))
 
         #outlier_thresh = background_stats["median"] - (1.5 * (background_stats["p75"] - background_stats["p25"]))
         #score = len(dip_values[dip_values<outlier_thresh]) / len(dip_values) * 1000
