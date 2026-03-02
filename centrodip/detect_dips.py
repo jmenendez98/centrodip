@@ -267,6 +267,7 @@ def estimate_background_from_masked(
         "mean": float(np.mean(bg_vals)) if bg_vals.size else np.nan,
         "p25": float(np.percentile(bg_vals, 25)) if bg_vals.size else np.nan,
         "p75": float(np.percentile(bg_vals, 75)) if bg_vals.size else np.nan,
+        "std": float(np.std(bg_vals)) if bg_vals.size else np.nan,
         "values": bg_vals,
         "mask": mask,
         "n_total": int(n),
@@ -398,20 +399,19 @@ def find_edges(
 
         # exponential scoring with saturation, 
         # where tau controls how quickly it saturates (higher tau = slower saturation)
-        tau = 1.5 * (background_stats["p75"] - background_stats["p25"])
-        s = np.mean(float(background_stats["median"]) - dip_values)
-        score = int(np.clip(1000.0 * (1.0 - np.exp(-s / tau)), 0.0, 1000.0))
+        #tau = 1.5 * (background_stats["p75"] - background_stats["p25"])
+        #s = np.mean(float(background_stats["median"]) - dip_values)
+        #score = int(np.clip(1000.0 * (1.0 - np.exp(-s / tau)), 0.0, 1000.0))
 
         # trying to implement a sigmoid scoring function
         # considers both depth and variability of the background
-        B = float(background_stats["median"])
-        iqr = float(background_stats["p75"] - background_stats["p25"])
-        iqr = max(iqr, 1e-6)  # prevent divide-by-zero / tiny IQR
-        s = float(np.mean(np.maximum(0.0, B - dip_values)))
-        z = s / iqr
-        z0 = 1.5   # threshold in "IQR units": z=1 => ~500
-        k  = 6.0   # steepness: higher => harsher on weak dips
-        score = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - z0))), 0.0, 1000.0))
+        bkgrd_mean   = max(float(background_stats["mean"]), 1e-6)
+        bkgrd_std    = max(float(background_stats["std"]), 1e-6)
+        deficit      = float( np.mean(np.maximum(0.0, bkgrd_mean - dip_values)))
+        z_abs        = deficit / bkgrd_std
+        z_rel        = deficit / bkgrd_mean
+        z            = np.sqrt(z_abs * z_rel)                                                   # geometric mean
+        score        = int(np.clip(1000.0 / (1.0 + np.exp(-1 * (z - 1))), 0.0, 1000.0))
 
         #outlier_thresh = background_stats["median"] - (1.5 * (background_stats["p75"] - background_stats["p25"]))
         #score = len(dip_values[dip_values<outlier_thresh]) / len(dip_values) * 1000
