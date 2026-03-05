@@ -391,18 +391,6 @@ def find_edges(
             raw_scores.append(0.0)
             continue
 
-        #s = np.mean(-np.log(np.searchsorted(np.sort(bg_values), dip_values, side="right") / len(bg_values) + 1e-12))
-        #score = int(np.clip(1000 * s / 3, 0, 1000))
-
-        #deficit = np.mean(float(background_stats["median"]) - dip_values)
-        #score = 1000*(deficit/background_stats["median"])
-
-        # exponential scoring with saturation, 
-        # where tau controls how quickly it saturates (higher tau = slower saturation)
-        #tau = 1.5 * (background_stats["p75"] - background_stats["p25"])
-        #s = np.mean(float(background_stats["median"]) - dip_values)
-        #score = int(np.clip(1000.0 * (1.0 - np.exp(-s / tau)), 0.0, 1000.0))
-
         # trying to implement a sigmoid scoring function
         # considers both depth and variability of the background
         bkgrd_mean   = max(float(background_stats["mean"]), 1e-6)
@@ -413,9 +401,6 @@ def find_edges(
         z            = np.sqrt(z_abs * z_rel)
         k            = 1                                                        
         score        = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - 1))), 0.0, 1000.0))
-
-        #outlier_thresh = background_stats["median"] - (1.5 * (background_stats["p75"] - background_stats["p25"]))
-        #score = len(dip_values[dip_values<outlier_thresh]) / len(dip_values) * 1000
 
         scores.append(score)
     bed_scores = np.asarray(scores, dtype=float)
