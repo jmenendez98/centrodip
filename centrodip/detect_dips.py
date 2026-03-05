@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 import numpy as np
-from scipy import signal
+from scipy import signal, stats
 
 from centrodip.bedtable import BedTable, IntervalRecord
 
@@ -374,7 +374,7 @@ def find_edges(
         halfpoint_idxs = merged
 
     # --- 2) compute raw scores per region ---
-    bg_values = background_stats["values"]
+    bkgrd_values = background_stats["values"]
     scores: List[float] = []
     for (l_i, r_i) in halfpoint_idxs:
         l_i = max(0, min(int(l_i), n - 1))
@@ -410,8 +410,9 @@ def find_edges(
         deficit      = float( np.mean(np.maximum(0.0, bkgrd_mean - dip_values)))
         z_abs        = deficit / bkgrd_std
         z_rel        = deficit / bkgrd_mean
-        z            = np.sqrt(z_abs * z_rel)                                                   # geometric mean
-        score        = int(np.clip(1000.0 / (1.0 + np.exp(-1 * (z - 1))), 0.0, 1000.0))
+        z            = np.sqrt(z_abs * z_rel)
+        k            = 1                                                        
+        score        = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - 1))), 0.0, 1000.0))
 
         #outlier_thresh = background_stats["median"] - (1.5 * (background_stats["p75"] - background_stats["p25"]))
         #score = len(dip_values[dip_values<outlier_thresh]) / len(dip_values) * 1000
