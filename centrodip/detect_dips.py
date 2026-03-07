@@ -9,30 +9,18 @@ from centrodip.bedtable import BedTable, IntervalRecord
 
 
 def detectDips(
+    chrom: str,
     bedgraph: BedTable,
     *,
     prominence: float,
     height: float,
     enrichment: bool,
     broadness: float,
-    x_mode: str = "start",  # "start" or "midpoint",
+    score_sensitivity: float,
     label: str = "CDR",
     color: str = "50,50,255",
+    debug: bool = False,
 ) -> BedTable:
-    """
-    Detect dips using a LOWESS-output BedTable (BEDGRAPH+2 style):
-      chrom start end smoothedY dY
-
-    Returns:
-      BedTable where each record is a dip interval:
-        chrom  dip_start  dip_end  (extras contain dip_id, left_idx, right_idx)
-
-    Notes:
-    - This function assumes a single chromosome input; if multiple chroms are present,
-      it will still work but dip intervals may be nonsense across chrom boundaries.
-      Prefer calling per chrom (see detectDips_as_bedtable_all_chroms).
-    """
-
     def _safe_extras(r: IntervalRecord, idx: int) -> float:
         """
         Return extras[idx] as float; NaN if missing/bad.
@@ -57,13 +45,8 @@ def detectDips(
     chroms = {r.chrom for r in rows}
     chrom_for_output = rows[0].chrom
 
-    # x positions used for reporting dips (in your old code this was cpg_pos)
-    if x_mode == "start":
-        positions = np.asarray([r.start for r in rows], dtype=int)
-    elif x_mode == "midpoint":
-        positions = np.asarray([(r.start + r.end) // 2 for r in rows], dtype=int)
-    else:
-        raise ValueError("x_mode must be 'start' or 'midpoint'")
+    # x positions used for reporting dips
+    positions = np.asarray([r.start for r in rows], dtype=int)
 
     # smoothed and slope come from extras
     smoothed = np.asarray([_safe_extras(r, 0) for r in rows], dtype=float)
@@ -76,35 +59,55 @@ def detectDips(
     # call dip centers using scipy.find_peaks
     dip_center_idxs = find_dip_centers(smoothed, prominence, height, enrichment)
 
+    if debug:
+        print(f"[DEBUG] {chrom}: found {len(dip_center_idxs)} potential dip centers. [prominence={prominence}; height={height}].")
+
     # find initial edges using simple thresholding
-    simple_threshold = np.percentile(smoothed, q=50)
-    simple_regions, simple_idxs = find_simple_edges(
-        chrom_for_output,
-        smoothed, 
-        positions,
-        simple_threshold, 
-        dip_center_idxs
+    # at smoothed methylation median
+    simple_regions, simple_idxs = find_edges(
+        chrom = chrom_for_output,
+        smoothed = smoothed,
+        positions = positions,
+        background_median = np.median(smoothed),
+        score_sensitivity = score_sensitivity,
+        dip_center_idxs = dip_center_idxs,
+        broadness = 1,
+        label = label,
+        color = "211,211,211",                       # a light grey
+        debug = False
     )
 
+    if debug:
+        print(f"[DEBUG] {chrom}: masking out {np.sum([e - s for s, e in simple_idxs])} CpGs from background.")
+
     # estimate out of CDR methylation 
-    background_stats = estimate_background_from_masked(
+    background_median = estimate_bkgrd_median(
         smoothed=smoothed,
         masked_regions=simple_idxs,
     )
+
+    if debug:
+        print(f"[DEBUG] {chrom}: estimated background median = {background_median:.2f}.")
+        print(f"[DEBUG] {chrom}: estimated score inflection (~500) = {(background_median*(1-score_sensitivity)):.2f}.")
 
     # get half-point edges using dip_centers, smoothed, and background median
     dip_regions, halfpoint_idxs = find_edges(
         chrom = chrom_for_output,
         smoothed = smoothed,
         positions = positions,
-        background_stats = background_stats,
+        background_median = background_median,
+        score_sensitivity = score_sensitivity,
         dip_center_idxs = dip_center_idxs,
-        width = broadness,
+        broadness = broadness,
         label = label,
-        color = color
+        color = color,
+        debug = debug
     )
 
-    return dip_regions, background_stats
+    if debug:
+        print(f"[DEBUG] {chrom}: detected {len(dip_regions)} potential dip regions. [broadness={broadness}; score_sensitivity={score_sensitivity}].")
+
+    return dip_regions, {"median": background_median, "values": smoothed[np.isfinite(smoothed)]}
 
 
 def find_dip_centers(
@@ -223,28 +226,14 @@ def find_simple_edges(
 
     return BedTable(out, inferred_kind="bed", inferred_ncols=6), unique_edges
 
-def estimate_background_from_masked(
+def estimate_bkgrd_median(
     smoothed: np.ndarray,
     masked_regions: list[tuple[int, int]],
 ):
     """
-    Estimate background methylation statistics after masking dip/CDR regions.
-
-    Parameters
-    ----------
-    smoothed : array
-        Smoothed methylation values (ordered).
-    masked_regions : list of (start_pos, end_pos)
-        Regions to exclude (CDRs/dips).
-
-    Returns
-    -------
-    dict with baseline statistics
+    Estimate background methylation median after masking a set of potential dip/CDR regions.
     """
     n = len(smoothed)
-    if n == 0:
-        return {"median": np.nan, "mean": np.nan, "p25": np.nan, "p75": np.nan, "values": np.array([]), "mask": np.array([], bool)}
-
     mask = np.ones(n, dtype=bool)
 
     for l, r in masked_regions:
@@ -253,7 +242,6 @@ def estimate_background_from_masked(
         if r <= l:
             continue
         mask[l : r + 1] = False
-
     good = mask & np.isfinite(smoothed)
 
     # optional safety: if everything got masked, fall back to any finite points
@@ -261,35 +249,20 @@ def estimate_background_from_masked(
         good = np.isfinite(smoothed)
 
     bg_vals = smoothed[good]
-
-    out = {
-        "median": float(np.median(bg_vals)) if bg_vals.size else np.nan,
-        "mean": float(np.mean(bg_vals)) if bg_vals.size else np.nan,
-        "p25": float(np.percentile(bg_vals, 25)) if bg_vals.size else np.nan,
-        "p75": float(np.percentile(bg_vals, 75)) if bg_vals.size else np.nan,
-        "std": float(np.std(bg_vals)) if bg_vals.size else np.nan,
-        "values": bg_vals,
-        "mask": mask,
-        "n_total": int(n),
-        "n_masked": int((~mask).sum()),
-        "n_bg": int(bg_vals.size),
-    }
-    return out
+    return float(np.median(bg_vals)) if bg_vals.size else np.nan
 
 def find_edges(
     chrom: str,
     smoothed: np.ndarray,
     positions: np.ndarray,
-    background_stats: dict,
+    background_median: float,
+    score_sensitivity: float,
     dip_center_idxs: np.ndarray,
+    broadness: float,
     label: str,
     color: str, 
-    *,
-    width: float = 0.5,
-    min_depth: float = 0.0,
-    k_consecutive: int = 1,
-    end_inclusive: bool = True,
-) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+    debug: bool = False,
+) -> [BedTable, List[Tuple[int, int]]]:
     """
     Half-depth edge caller using a single background level (median outside masked dips/CDRs).
 
@@ -306,12 +279,8 @@ def find_edges(
         return [], []
     if len(positions) != n:
         raise ValueError("smoothed and positions must have the same length")
-    if not np.isfinite(background_stats["median"]):
-        raise ValueError("background_median must be finite")
 
-    if k_consecutive < 1:
-        raise ValueError("k_consecutive must be >= 1")
-
+    k_consecutive = 5
     def _scan_left(c: int, level: float) -> int:
         # find leftmost index of a run of k_consecutive points >= level
         i = c
@@ -342,10 +311,8 @@ def find_edges(
         y0 = smoothed[c]
         if not np.isfinite(y0):
             continue
-        depth = float(background_stats["median"] - y0)
-        if depth < min_depth:
-            continue
-        level = float(y0 + width * depth)
+        depth = float(background_median - y0)
+        level = float(y0 + broadness * depth)
         li = _scan_left(c, level)
         ri = _scan_right(c, level)
         if ri <= li:
@@ -374,8 +341,8 @@ def find_edges(
         halfpoint_idxs = merged
 
     # --- 2) compute raw scores per region ---
-    bkgrd_values = background_stats["values"]
     scores: List[float] = []
+    null_deficit = background_median * (1 - score_sensitivity)
     for (l_i, r_i) in halfpoint_idxs:
         l_i = max(0, min(int(l_i), n - 1))
         r_i = max(0, min(int(r_i), n - 1))
@@ -393,14 +360,22 @@ def find_edges(
 
         # trying to implement a sigmoid scoring function
         # considers both depth and variability of the background
-        bkgrd_mean   = max(float(background_stats["mean"]), 1e-6)
-        bkgrd_std    = max(float(background_stats["std"]), 1e-6)
-        deficit      = float( np.mean(np.maximum(0.0, bkgrd_mean - dip_values)))
-        z_abs        = deficit / bkgrd_std
-        z_rel        = deficit / bkgrd_mean
-        z            = np.sqrt(z_abs * z_rel)
-        k            = 1                                                        
-        score        = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - 1))), 0.0, 1000.0))
+        # bkgrd_mean   = max(float(background_stats["mean"]), 1e-6)
+        # bkgrd_std    = max(float(background_stats["std"]), 1e-6)
+        # deficit      = float( np.mean(np.maximum(0.0, bkgrd_mean - dip_values)))
+        # z_abs        = deficit / bkgrd_std
+        # z_rel        = deficit / bkgrd_mean
+        # z            = np.sqrt(z_abs * z_rel)
+        # k            = 1                                                        
+        # score        = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - 1))), 0.0, 1000.0))
+
+        # implement scoring algorithm i thought of at 3am last night...
+        deficit = np.mean(null_deficit - dip_values)
+        z = (deficit / background_median) * np.sqrt(dip_values.size)
+        score = round(np.clip(1000.0 / (1 + np.exp(-(z))), 0.0, 1000.0))
+
+        if debug:
+            print(f"[DEBUG] {chrom}:{positions[l_i]}-{positions[r_i]}: dip_mean={np.mean(dip_values):.2f}; deficit={deficit:.2f}; z={z:.2f}; score={score}")
 
         scores.append(score)
     bed_scores = np.asarray(scores, dtype=float)
@@ -414,9 +389,7 @@ def find_edges(
             continue
 
         start = int(positions[l_i])
-        end = int(positions[r_i])
-        if not end_inclusive:
-            end = end + 1
+        end = int(positions[r_i]) + 1
 
         out.append(
             IntervalRecord(

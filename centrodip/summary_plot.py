@@ -204,6 +204,9 @@ def _add_track_legends(
     handles = [
         Line2D([0], [0], color="black", lw=2, alpha=0.25, label="Raw"),
         Line2D([0], [0], color="orange", lw=2, alpha=0.75, label="LOWESS"),
+        Line2D([0], [0], color="red", lw=0.75, alpha=0.75, linestyle="--", label=f"Background median"),
+        Line2D([0], [0], color="darkorange", lw=0.75, alpha=0.75, linestyle=":", label=f"Score inflection (~500)"),
+
     ]
     ax.legend(
         handles=handles,
@@ -231,12 +234,8 @@ def _bt_filter_chrom(bt: Optional[BedTable], chrom: str) -> Optional[BedTable]:
     return BedTable(recs, inferred_kind=bt.inferred_kind, inferred_ncols=bt.inferred_ncols)
 
 
-def _bt_positions(bt: BedTable, *, x_mode: str = "start") -> np.ndarray:
-    if x_mode == "start":
-        return np.asarray([r.start for r in bt._records], dtype=int)
-    if x_mode == "midpoint":
-        return np.asarray([(r.start + r.end) // 2 for r in bt._records], dtype=int)
-    raise ValueError("x_mode must be 'start' or 'midpoint'")
+def _bt_positions(bt: BedTable) -> np.ndarray:
+    return np.asarray([r.start for r in bt._records], dtype=int)
 
 
 def _bt_get_col_1based(bt: BedTable, col_1based: int, *, as_float: bool = True) -> np.ndarray:
@@ -298,26 +297,25 @@ def _dips_to_starts_ends(dips: Optional[BedTable]) -> Tuple[List[int], List[int]
 
 
 # ---------- Main plotting entry ----------
-def centrodipSummaryPlot_bedtable(
+def centrodipChromSummaryPlot(
     bedMethyl: BedTable,
     regions: BedTable,
     lowess_bg: BedTable,
     dips_final: Optional[BedTable],
     dips_unfiltered: Optional[BedTable],
+    bkgrd_median: Optional[float],
     output_path: Path | str,
     *,
     cov_col_1based: int = 10,
     frac_mod_col_1based: int = 11,
-    x_mode: str = "start",
     panel_height: float = 5.5,
     bottom_margin_in: float = 0.5,
     left_margin_in: float = 1.5,
     right_margin_in: float = 2,
     bp_per_inch: float = 250_000.0,   # 250kb per inch
+    dpi: int = 600,
+    args: Optional[Dict] = None,  # for future extensibility
 ) -> Path:
-    """
-    ...
-    """
 
     chroms = sorted({r.chrom for r in bedMethyl._records})
     if not chroms:
@@ -325,10 +323,7 @@ def centrodipSummaryPlot_bedtable(
 
     # ----- Determine span (in bp) for THIS plot -----
     # In your usage, bedMethyl is already per-chrom/per-region for this plot.
-    if x_mode == "start":
-        all_pos = np.asarray([r.start for r in bedMethyl._records], dtype=int)
-    else:
-        all_pos = np.asarray([(r.start + r.end) // 2 for r in bedMethyl._records], dtype=int)
+    all_pos = np.asarray([r.start for r in bedMethyl._records], dtype=int)
 
     x_min_global = int(np.min(all_pos))
     x_max_global = int(np.max(all_pos))
@@ -372,7 +367,7 @@ def centrodipSummaryPlot_bedtable(
             ax.set_axis_off()
             continue
 
-        cpg_pos = _bt_positions(bm_chr, x_mode=x_mode)
+        cpg_pos = _bt_positions(bm_chr)
         cpg_coverage = _bt_get_col_1based(bm_chr, cov_col_1based, as_float=True)
         frac_mod = _bt_get_col_1based(bm_chr, frac_mod_col_1based, as_float=True)
 
@@ -415,6 +410,18 @@ def centrodipSummaryPlot_bedtable(
                 alpha=0.75,
                 color="orange",
             )
+
+        # add a horizontal line for the LOWESS background median (if provided)
+        if bkgrd_median is not None and not np.isnan(bkgrd_median):
+            y_bg = 1.75 + bkgrd_median / 100.
+            ax.axhline(y=y_bg, color="red", linestyle="--", linewidth=0.5, alpha=0.75)
+
+            # add another line that is the max score threshold estimate:
+            # this is bkgrd_median * (1-args["score_sensitivity"])
+            if args is not None and "score_sensitivity" in args:
+                threshold = bkgrd_median * (1.0 - args["score_sensitivity"])
+                y_thresh = 1.75 + threshold / 100.0
+                ax.axhline(y=y_thresh, color="red", linestyle=":", linewidth=0.75, alpha=0.75)
 
         # unfiltered dips
         u_starts, u_ends = _dips_to_starts_ends(du_chr)
@@ -516,10 +523,67 @@ def centrodipSummaryPlot_bedtable(
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=300)
+    fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
+
+    return fig, output_path
+
+
+def centrodipCombinedSummaryPlot(
+    fig_dict: dict,
+    output_path: str,
+    dpi: int = 600,
+) -> str:
+    """
+    Vertically stack chromosome figures from a dict of {chrom: fig},
+    sorted alphabetically by chromosome name.
+
+    Parameters
+    ----------
+    fig_dict    : dict of {chrom (str): fig (matplotlib.figure.Figure)}
+    output_path : path to save the combined PNG
+    dpi         : resolution of the output image
+
+    Returns
+    -------
+    output_path : str
+    """
+
+    # sort chroms alphabetically
+    sorted_chroms = sorted(fig_dict.keys())
+
+    # render each fig to RGBA array
+    arrays = []
+    for chrom in sorted_chroms:
+        fig = fig_dict[chrom]
+        fig.canvas.draw()                                                        # must draw before reading buffer
+        arr = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).copy()
+        w, h = fig.canvas.get_width_height(physical=True)
+        assert arr.size == w * h * 4, f"Buffer mismatch for {chrom}: {arr.size} != {w}*{h}*4"
+        arr = arr.reshape(h, w, 4)
+        arrays.append(arr)                                                       # was missing!
+
+    # pad widths to match widest figure
+    max_w = max(a.shape[1] for a in arrays)
+    padded = []
+    for a in arrays:
+        if a.shape[1] < max_w:
+            pad = np.full((a.shape[0], max_w - a.shape[1], 4), 255, dtype=np.uint8)
+            a   = np.concatenate([a, pad], axis=1)
+        padded.append(a)
+
+    # stack vertically and save
+    stacked = np.concatenate(padded, axis=0)
+    h, w    = stacked.shape[:2]
+    fig_out = plt.figure(figsize=(w / dpi, h / dpi), dpi=dpi)
+    ax      = fig_out.add_axes([0, 0, 1, 1])
+    ax.imshow(stacked)
+    ax.axis("off")
+
+    fig_out.savefig(output_path, dpi=dpi, pad_inches=0)
+    plt.close("all")
 
     return output_path
 
 
-__all__ = ["centrodipSummaryPlot_bedtable"]
+__all__ = ["centrodipChromSummaryPlot", "centrodipCombinedSummaryPlot"]

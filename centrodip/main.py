@@ -13,49 +13,44 @@ from centrodip.bedtable import BedTable
 import centrodip.bedmethyl_smooth as bms
 import centrodip.detect_dips as dd
 import centrodip.filter_dips as fd
-import centrodip.summary_plot as pd
+import centrodip.summary_plot as sp
 
 
 def _process_chrom(item):
     chrom, bm_chr, r_chr, argsd = item
 
     bedGraph_LOWESS = bms.bedMethyl_LOWESS(
-        bm_chr,
+        chrom=chrom,
+        bedMethyl=bm_chr,
         window_bp=argsd["window_size"],
         cov_conf=argsd["cov_conf"],
         y_col_1based=11 if not argsd["bedgraph"] else 7,
         cov_col_1based=10 if not argsd["bedgraph"] else None,
+        debug=argsd["debug"],
     )
 
-    dips, lowess_bg_stats = dd.detectDips(
+    dips, bkgrd_stats = dd.detectDips(
+        chrom=chrom,
         bedgraph=bedGraph_LOWESS,
         prominence=argsd["prominence"],
         height=argsd["height"],
         enrichment=argsd["enrichment"],
         broadness=argsd["broadness"],
+        score_sensitivity=argsd["score_sensitivity"],
         label=argsd["label"],
         color=argsd["color"],
+        debug=argsd["debug"],
     )
 
     filtered_dips = fd.filterDips(
+        chrom=chrom,
         dips=dips,
         regions=r_chr,
         min_size=argsd["min_size"],
         min_score=argsd["min_score"],
         cluster_distance=argsd["cluster_distance"],
+        debug=argsd["debug"],
     )
-
-    debug_msg = None
-    if argsd["debug"]:
-        debug_msg = (
-            f"[DEBUG] {chrom}:\n"
-            f" - Smoothed {len(bedGraph_LOWESS)} CpG sites.\n"
-            f" - Background identified: median={lowess_bg_stats['median']:.3f}; "
-            f"IQR=({lowess_bg_stats['p25']:.3f}, {lowess_bg_stats['p75']:.3f}); "
-            f"n={len(lowess_bg_stats['values'])}.\n"
-            f" - Detected {len(dips)} dips.\n"
-            f" - Filtered to {len(filtered_dips)} dips.\n"
-        )
 
     plot_path = None
     if argsd["plot"]:
@@ -63,15 +58,13 @@ def _process_chrom(item):
         plot_dir = out_path.parent / f"{out_path.stem}_plots"
         plot_path = str(plot_dir / f"{out_path.stem}.{chrom}.summary.png")
 
-    return chrom, bm_chr, bedGraph_LOWESS, dips, filtered_dips, lowess_bg_stats, debug_msg, plot_path
+    return chrom, bm_chr, bedGraph_LOWESS, dips, filtered_dips, bkgrd_stats, None, plot_path
 
 
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Inspect BED / bedGraph files using BedTable"
-    )
+    parser = argparse.ArgumentParser(description="Detect Centromeric Dip Regions (CDRs) from bedMethyl file.")
 
     # take in positional - file paths
     parser.add_argument("bedMethyl", type=str, help="Path to the bedMethyl file")
@@ -94,7 +87,7 @@ def main():
 
     smoothing_group = parser.add_argument_group('Smoothing Options')
     smoothing_group.add_argument(
-        "--window-size",
+        "-w", "--window-size",
         type=int,
         default=10000,
         help="Window size (bp) to use in LOWESS smoothing of fraction modified. (default: 10000)",
@@ -108,9 +101,9 @@ def main():
 
     dip_detect_group = parser.add_argument_group('Detection Options')
     dip_detect_group.add_argument(
-        "--prominence",
+        "-p", "--prominence",
         type=float,
-        default=0.334,
+        default=0.333,
         help="Sensitivity of dip detection for scipy.signal.find_peaks. Higher values require more pronounced dips. Must be a float between 0 and 1. (default: 0.334)",
     )
     dip_detect_group.add_argument(
@@ -120,10 +113,16 @@ def main():
         help="Minimum depth for dip detection, lower values require deeper dips. Must be a float between 0 and 1. (default: 0.1)",
     )
     dip_detect_group.add_argument(
-        "--broadness",
+        "-b", "--broadness",
         type=float,
         default=0.9,
         help="Broadness of dips called, higher values make broader entries. Recommended to use float between 0 and 1. (default: 0.9)",
+    )
+    dip_detect_group.add_argument(
+        "-s", "--score-sensitivity",
+        type=float,
+        default=0.333,
+        help="Sensitivity of score calculation for dip detection. Must be a float between 0 and 1. (default: 0.334)",
     )
     dip_detect_group.add_argument(
         "--enrichment",
@@ -223,10 +222,6 @@ def main():
     if not args.bedgraph:
         bedMethyl_in_region = bedMethyl_in_region.filter(lambda r: r.name == args.mod_code)
 
-    out_path = Path(args.output)
-    plot_dir = out_path.parent / f"{out_path.stem}_plots"
-    if args.plot:
-        plot_dir.mkdir(parents=True, exist_ok=True)
 
     argsd = {
         "mod_code": args.mod_code,
@@ -237,6 +232,7 @@ def main():
         "height": args.height,
         "enrichment": args.enrichment,
         "broadness": args.broadness,
+        "score_sensitivity": args.score_sensitivity,
         "label": args.label,
         "color": args.color,
         "min_size": args.min_size,
@@ -244,8 +240,13 @@ def main():
         "cluster_distance": args.cluster_distance,
         "debug": args.debug,
         "plot": args.plot,
-        "output": out_path,
+        "output": args.output,
     }
+
+    out_path = Path(argsd["output"])
+    plot_dir = out_path.parent / f"{out_path.stem}_plots"
+    if args.plot:
+        plot_dir.mkdir(parents=True, exist_ok=True)
 
     chrom_map = bedMethyl_in_region.groupby_chrom()  # should be dict-like: chrom -> BedTable or list[IntervalRecord]
 
@@ -266,6 +267,7 @@ def main():
     all_lowess = []
     all_dips = []
     all_filtered = []
+    all_plots = {}
     all_bg_stats = {}  
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.threads) as ex:
@@ -280,17 +282,21 @@ def main():
 
             # plotting (do this in main process to avoid matplotlib multiprocessing issues)
             if args.plot and plot_path is not None:
+                plot_path = str(plot_dir / f"{out_path.stem}.{chrom}.summary.png")
                 Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
                 if args.debug:
-                    print(f"Writing summary plot to: {plot_path}")
-                pd.centrodipSummaryPlot_bedtable(
+                    print(f"[DEBUG] {chrom}: Writing summary plot: {plot_path}")
+                fig, output_path = sp.centrodipChromSummaryPlot(
                     bedMethyl=bm_chr,              # plot only this chrom
                     regions=regions,
                     lowess_bg=bedGraph_LOWESS,
                     dips_unfiltered=dips,
+                    bkgrd_median=lowess_bg_stats["median"],
                     dips_final=filtered_dips,
                     output_path=plot_path,
+                    args=argsd,
                 )
+                all_plots[chrom] = fig
 
             # Collect outputs
             all_lowess.extend(list(bedGraph_LOWESS._records))
@@ -306,19 +312,27 @@ def main():
     if args.debug:
         # save smoothed bedMethyl
         lowess_path = str(Path(args.output).with_suffix(".LOWESS.bedgraph"))
-        print(f"Smoothed bedMethyl out: {lowess_path}")
+        print(f"[DEBUG] Smoothed bedMethyl: {lowess_path}")
         bedGraph_LOWESS_all.to_path(lowess_path)
 
         # save unfiltered/detected dips
         unfiltered_path = str(Path(args.output).with_suffix(".detected_dips.bed"))
-        print(f"Detected dips out: {unfiltered_path}")
+        print(f"[DEBUG] All detected dips: {unfiltered_path}")
         dips_all.to_path(unfiltered_path)
+    
+    # --- Concatentate into single summary plot (if requested) ---
+    if args.plot:
+        plot_path = str(plot_dir / f"{out_path.stem}.all.summary.png")
+        Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
+        if args.debug:
+            print(f"[DEBUG] Combined summary plot: {plot_path}")
+        sp.centrodipCombinedSummaryPlot(fig_dict=all_plots, output_path=plot_path)
 
     # -------------------------
     # Write output (FINAL dips)
     # -------------------------
     if args.debug:
-        print(f"Writing output to: {args.output}")
+        print(f"[DEBUG] Final output: {args.output}")
     filtered_dips_all.to_path(out_path)
 
 
