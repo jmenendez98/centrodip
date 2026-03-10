@@ -14,6 +14,11 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
+import matplotlib as mpl
+mpl.rcParams['agg.path.chunksize']      = 10000
+mpl.rcParams['path.simplify']           = True
+mpl.rcParams['path.simplify_threshold'] = 0.5  # 0-1, higher = more simplification
+
 
 def _normalise_interval(start: int, end: int) -> Tuple[float, float]:
     left = float(min(start, end))
