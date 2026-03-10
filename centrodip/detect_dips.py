@@ -370,12 +370,18 @@ def find_edges(
         # score        = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - 1))), 0.0, 1000.0))
 
         # implement scoring algorithm i thought of at 3am last night...
-        deficit = np.mean(null_deficit - dip_values)
-        z = (deficit / background_median) * np.sqrt(dip_values.size)
-        score = round(np.clip(1000.0 / (1 + np.exp(-(z))), 0.0, 1000.0))
+        # deficit = np.mean(null_deficit - dip_values)
+        # z = (deficit / background_median) * np.log1p(dip_values.size)   # if you want to include dip size
+
+        a = np.mean(null_deficit-dip_values) / background_median # only consider positive deficits; avoid negative scores from small upward fluctuations
+        b = (null_deficit-np.min(dip_values)) / background_median
+        deficit = np.sign(a) * np.sqrt( np.abs(a) * np.abs(b) )
+        z = deficit * np.log1p(dip_values.size)
+        score = round(np.clip(1000.0 / (1 + np.exp(-3 * z)), 0.0, 1000.0))
 
         if debug:
             print(f"[DEBUG] {chrom}:{positions[l_i]}-{positions[r_i]}: dip_mean={np.mean(dip_values):.2f}; deficit={deficit:.2f}; z={z:.2f}; score={score}")
+            # print(f"[DEBUG] a={a:.4f}, b={b:.4f}, null_deficit={null_deficit:.2f}")
 
         scores.append(score)
     bed_scores = np.asarray(scores, dtype=float)
