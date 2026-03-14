@@ -41,26 +41,20 @@ def detectDips(
     if not rows:
         return BedTable([], inferred_kind="bed", inferred_ncols=6), {}
 
-    # Ensure we're operating per-chromosome (this function assumes one chrom at a time)
     chroms = {r.chrom for r in rows}
     chrom_for_output = rows[0].chrom
-
-    # x positions used for reporting dips
-    positions = np.asarray([r.start for r in rows], dtype=int)
-
-    # smoothed and slope come from extras
-    smoothed = np.asarray([_safe_extras(r, 0) for r in rows], dtype=float)
+    positions = np.asarray([r.start for r in rows], dtype=int) # x positions used for reporting dips
+    smoothed = np.asarray([_safe_extras(r, 0) for r in rows], dtype=float) # smoothed and slope come from extras
     smoothed_dy = np.asarray([_safe_extras(r, 1) for r in rows], dtype=float)
 
     # -------------------------
     # Find dip centers and edges
     # -------------------------
-
-    # call dip centers using scipy.find_peaks
-    dip_center_idxs = find_dip_centers(smoothed, prominence, height, enrichment)
+    dip_center_idxs = find_dip_centers(smoothed, prominence, height, enrichment) # call dip centers using scipy.find_peaks
 
     if debug:
-        print(f"[DEBUG] {chrom}: found {len(dip_center_idxs)} potential dip centers. [prominence={prominence}; height={height}].")
+        kind = "enrichment peaks" if enrichment else "dip centers"
+        print(f"[DEBUG] {chrom}: found {len(dip_center_idxs)} potential {kind}. [prominence={prominence}; height={height}].")
 
     # find initial edges using simple thresholding
     # at smoothed methylation median
@@ -72,8 +66,9 @@ def detectDips(
         score_sensitivity = score_sensitivity,
         dip_center_idxs = dip_center_idxs,
         broadness = 1,
+        enrichment=enrichment,
         label = label,
-        color = "211,211,211",                       # a light grey
+        color = "211,211,211",
         debug = False
     )
 
@@ -88,7 +83,8 @@ def detectDips(
 
     if debug:
         print(f"[DEBUG] {chrom}: estimated background median = {background_median:.2f}.")
-        print(f"[DEBUG] {chrom}: estimated score inflection (~500) = {(background_median*(1-score_sensitivity)):.2f}.")
+        inflection = background_median * (1 + score_sensitivity) if enrichment else background_median * (1 - score_sensitivity)
+        print(f"[DEBUG] {chrom}: estimated score inflection (~500) = {inflection:.2f}.")
 
     # get half-point edges using dip_centers, smoothed, and background median
     dip_regions, halfpoint_idxs = find_edges(
@@ -99,13 +95,15 @@ def detectDips(
         score_sensitivity = score_sensitivity,
         dip_center_idxs = dip_center_idxs,
         broadness = broadness,
+        enrichment=enrichment,
         label = label,
         color = color,
         debug = debug
     )
 
     if debug:
-        print(f"[DEBUG] {chrom}: detected {len(dip_regions)} potential dip regions. [broadness={broadness}; score_sensitivity={score_sensitivity}].")
+        kind = "enrichment" if enrichment else "dip"
+        print(f"[DEBUG] {chrom}: detected {len(dip_regions)} potential {kind} regions. [broadness={broadness}; score_sensitivity={score_sensitivity}].")
 
     return dip_regions, {"median": background_median, "values": smoothed[np.isfinite(smoothed)]}
 
@@ -141,91 +139,6 @@ def find_dip_centers(
 
     return centers.astype(int)
 
-def find_simple_edges(
-    chrom_for_output: str,
-    data: np.ndarray,
-    positions: np.ndarray,
-    bounding_threshold: float,
-    centers: np.ndarray,
-) -> List[Tuple[int, int]]:
-    """
-    Simple edge finder:
-
-    For each dip center c, define edges as the first indices on each side
-    where data[idx] >= bounding_threshold.
-
-    - Left edge: scan c-1, c-2, ... until threshold hit (or 0)
-    - Right edge: scan c+1, c+2, ... until threshold hit (or n-1)
-
-    Returns list of (left_idx, right_idx) pairs.
-    """
-    data = np.asarray(data, dtype=float)
-    n = data.size
-    if n == 0:
-        return BedTable([], inferred_kind="bed", inferred_ncols=6), []
-
-    edges: List[Tuple[int, int]] = []
-
-    for c in np.asarray(centers, dtype=int):
-        if c < 0 or c >= n:
-            continue
-
-        # ---- left scan ----
-        left_idx: Optional[int] = None
-        li = c - 1
-        while li >= 0:
-            val = data[li]
-            if np.isfinite(val) and val >= bounding_threshold:
-                left_idx = li
-                break
-            li -= 1
-        if left_idx is None:
-            left_idx = 0
-
-        # ---- right scan ----
-        right_idx: Optional[int] = None
-        ri = c + 1
-        while ri < n:
-            val = data[ri]
-            if np.isfinite(val) and val >= bounding_threshold:
-                right_idx = ri
-                break
-            ri += 1
-        if right_idx is None:
-            right_idx = n - 1
-
-        # Ensure proper ordering and non-degenerate interval
-        if right_idx <= left_idx:
-            continue
-
-        edges.append((left_idx, right_idx))
-
-    # De-duplicate while preserving order
-    unique_edges = list(dict.fromkeys(tuple(e) for e in edges))
-
-    out: List[IntervalRecord] = []
-    for dip_id, (l_i, r_i) in enumerate(unique_edges, start=1):
-        l_i = max(0, min(l_i, len(positions) - 1))
-        r_i = max(0, min(r_i, len(positions) - 1))
-        if r_i <= l_i:
-            continue
-
-        start = int(positions[l_i])
-        end = int(positions[r_i])
-
-        out.append(
-            IntervalRecord(
-                chrom=chrom_for_output,
-                start=start,
-                end=end,
-                name=f"simpleDip_{dip_id}",
-                score=0,
-                strand='.',
-            )
-        )
-
-    return BedTable(out, inferred_kind="bed", inferred_ncols=6), unique_edges
-
 def estimate_bkgrd_median(
     smoothed: np.ndarray,
     masked_regions: list[tuple[int, int]],
@@ -244,7 +157,6 @@ def estimate_bkgrd_median(
         mask[l : r + 1] = False
     good = mask & np.isfinite(smoothed)
 
-    # optional safety: if everything got masked, fall back to any finite points
     if not np.any(good):
         good = np.isfinite(smoothed)
 
@@ -259,6 +171,7 @@ def find_edges(
     score_sensitivity: float,
     dip_center_idxs: np.ndarray,
     broadness: float,
+    enrichment: bool,
     label: str,
     color: str, 
     debug: bool = False,
@@ -281,29 +194,51 @@ def find_edges(
         raise ValueError("smoothed and positions must have the same length")
 
     k_consecutive = 5
-    def _scan_left(c: int, level: float) -> int:
-        # find leftmost index of a run of k_consecutive points >= level
-        i = c
-        while i >= 0:
-            j0 = max(0, i - (k_consecutive - 1))
-            window = smoothed[j0 : i + 1]
-            if window.size == k_consecutive and np.all(np.isfinite(window)) and np.all(window >= level):
-                return j0
-            i -= 1
-        return 0
 
-    def _scan_right(c: int, level: float) -> int:
-        # find rightmost index of a run of k_consecutive points >= level
-        i = c
-        while i < n:
-            j1 = min(n, i + k_consecutive)
-            window = smoothed[i:j1]
-            if window.size == k_consecutive and np.all(np.isfinite(window)) and np.all(window >= level):
-                return j1 - 1
-            i += 1
-        return n - 1
+    if enrichment:
+        # For enrichment: scan outward until k consecutive points DROP back to `level`
+        def _scan_left(c: int, level: float) -> int:
+            i = c
+            while i >= 0:
+                j0 = max(0, i - (k_consecutive - 1))
+                window = smoothed[j0 : i + 1]
+                if window.size == k_consecutive and np.all(np.isfinite(window)) and np.all(window <= level):
+                    return j0
+                i -= 1
+            return 0
 
-    # --- 1) call halfpoint edges as indices ---
+        def _scan_right(c: int, level: float) -> int:
+            i = c
+            while i < n:
+                j1 = min(n, i + k_consecutive)
+                window = smoothed[i:j1]
+                if window.size == k_consecutive and np.all(np.isfinite(window)) and np.all(window <= level):
+                    return j1 - 1
+                i += 1
+            return n - 1
+    else:
+        # For dips: scan outward until k consecutive points RISE back to `level`
+        def _scan_left(c: int, level: float) -> int:
+            i = c
+            while i >= 0:
+                j0 = max(0, i - (k_consecutive - 1))
+                window = smoothed[j0 : i + 1]
+                if window.size == k_consecutive and np.all(np.isfinite(window)) and np.all(window >= level):
+                    return j0
+                i -= 1
+            return 0
+
+        def _scan_right(c: int, level: float) -> int:
+            i = c
+            while i < n:
+                j1 = min(n, i + k_consecutive)
+                window = smoothed[i:j1]
+                if window.size == k_consecutive and np.all(np.isfinite(window)) and np.all(window >= level):
+                    return j1 - 1
+                i += 1
+            return n - 1
+
+    # --- 1) call edges as indices ---
     halfpoint_idxs: List[Tuple[int, int]] = []
     for c in centers:
         if c < 0 or c >= n:
@@ -311,82 +246,87 @@ def find_edges(
         y0 = smoothed[c]
         if not np.isfinite(y0):
             continue
-        depth = float(background_median - y0)
-        level = float(y0 + broadness * depth)
+
+        if enrichment:
+            # depth is how far ABOVE background the peak sits
+            depth = float(y0 - background_median)
+            # level is the point between peak and background (scaled by broadness)
+            level = float(y0 - broadness * depth)
+        else:
+            # depth is how far BELOW background the dip sits
+            depth = float(background_median - y0)
+            level = float(y0 + broadness * depth)
+
         li = _scan_left(c, level)
         ri = _scan_right(c, level)
         if ri <= li:
             continue
         halfpoint_idxs.append((li, ri))
 
-    halfpoint_idxs = list(dict.fromkeys(tuple(x) for x in halfpoint_idxs)) # de-duplicate 
+    halfpoint_idxs = list(dict.fromkeys(tuple(x) for x in halfpoint_idxs))
 
     # --- merge overlapping / touching index intervals ---
     if halfpoint_idxs:
-        # sort by left index, then right
         halfpoint_idxs.sort(key=lambda x: (x[0], x[1]))
-
         merged: List[Tuple[int, int]] = []
         cur_l, cur_r = halfpoint_idxs[0]
-
         for l, r in halfpoint_idxs[1:]:
-            # overlap or touch?
             if l <= cur_r:
                 cur_r = max(cur_r, r)
             else:
                 merged.append((cur_l, cur_r))
                 cur_l, cur_r = l, r
-
         merged.append((cur_l, cur_r))
         halfpoint_idxs = merged
 
     # --- 2) compute raw scores per region ---
+    # null_surplus / null_deficit: the background level shifted by score_sensitivity
+    # For dips:       score rewards values *below* background
+    # For enrichment: score rewards values *above* background
+    if enrichment:
+        null_surplus = background_median * (1 + score_sensitivity)
+    else:
+        null_deficit = background_median * (1 - score_sensitivity)
+
     scores: List[float] = []
-    null_deficit = background_median * (1 - score_sensitivity)
     for (l_i, r_i) in halfpoint_idxs:
         l_i = max(0, min(int(l_i), n - 1))
         r_i = max(0, min(int(r_i), n - 1))
 
         if r_i <= l_i:
-            raw_scores.append(0.0)
+            scores.append(0.0)
             continue
 
-        dip_values = smoothed[l_i : r_i + 1]
-        dip_values = dip_values[np.isfinite(dip_values)]
+        region_values = smoothed[l_i : r_i + 1]
+        region_values = region_values[np.isfinite(region_values)]
 
-        if dip_values.size < 3:
-            raw_scores.append(0.0)
+        if region_values.size < 3:
+            scores.append(0.0)
             continue
 
-        # trying to implement a sigmoid scoring function
-        # considers both depth and variability of the background
-        # bkgrd_mean   = max(float(background_stats["mean"]), 1e-6)
-        # bkgrd_std    = max(float(background_stats["std"]), 1e-6)
-        # deficit      = float( np.mean(np.maximum(0.0, bkgrd_mean - dip_values)))
-        # z_abs        = deficit / bkgrd_std
-        # z_rel        = deficit / bkgrd_mean
-        # z            = np.sqrt(z_abs * z_rel)
-        # k            = 1                                                        
-        # score        = int(np.clip(1000.0 / (1.0 + np.exp(-k * (z - 1))), 0.0, 1000.0))
+        if enrichment:
+            # mirror of the dip formula, but for upward deviation
+            a = np.mean(region_values - null_surplus) / background_median
+            b = (np.max(region_values) - null_surplus) / background_median
+        else:
+            a = np.mean(null_deficit - region_values) / background_median
+            b = (null_deficit - np.min(region_values)) / background_median
 
-        # implement scoring algorithm i thought of at 3am last night...
-        # deficit = np.mean(null_deficit - dip_values)
-        # z = (deficit / background_median) * np.log1p(dip_values.size)   # if you want to include dip size
-
-        a = np.mean(null_deficit-dip_values) / background_median # only consider positive deficits; avoid negative scores from small upward fluctuations
-        b = (null_deficit-np.min(dip_values)) / background_median
-        deficit = np.sign(a) * np.sqrt( np.abs(a) * np.abs(b) )
-        z = deficit * np.log1p(dip_values.size)
+        deficit = np.sign(a) * np.sqrt(np.abs(a) * np.abs(b))
+        z = deficit * np.log1p(region_values.size)
         score = round(np.clip(1000.0 / (1 + np.exp(-3 * z)), 0.0, 1000.0))
 
         if debug:
-            print(f"[DEBUG] {chrom}:{positions[l_i]}-{positions[r_i]}: dip_mean={np.mean(dip_values):.2f}; deficit={deficit:.2f}; z={z:.2f}; score={score}")
-            # print(f"[DEBUG] a={a:.4f}, b={b:.4f}, null_deficit={null_deficit:.2f}")
+            print(
+                f"[DEBUG] {chrom}:{positions[l_i]}-{positions[r_i]}: "
+                f"region_mean={np.mean(region_values):.2f}; deficit={deficit:.2f}; z={z:.2f}; score={score}"
+            )
 
         scores.append(score)
+
     bed_scores = np.asarray(scores, dtype=float)
 
-    # --- 3) build BedTable output with scores 0-1000 ---
+    # --- 3) build BedTable output ---
     out: List[IntervalRecord] = []
     for dip_id, ((l_i, r_i), bed_score) in enumerate(zip(halfpoint_idxs, bed_scores), start=1):
         l_i = max(0, min(int(l_i), n - 1))
