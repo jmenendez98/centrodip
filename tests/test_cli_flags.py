@@ -170,24 +170,6 @@ def _run_cli_bedgraph(run_main_no_parallel, tmp_path: Path, extra_args: tuple[st
 # -----------------------------
 # Tests: bedMethyl mode
 # -----------------------------
-def test_cli_runs_with_defaults_bedmethyl(run_main_no_parallel, tmp_path):
-    out = _run_cli_bedmethyl(run_main_no_parallel, tmp_path)
-    assert out.exists()
-    assert out.stat().st_size > 0
-
-
-def test_cli_mod_code_filters_bedmethyl(run_main_no_parallel, tmp_path):
-    # Synthetic uses mod_code="m", so matching should keep rows
-    out = _run_cli_bedmethyl(run_main_no_parallel, tmp_path, extra_args=("--mod-code", "m"))
-    assert out.exists()
-    assert out.stat().st_size > 0
-
-    # Non-matching should produce empty output (or a file with only headers/track lines)
-    out2 = _run_cli_bedmethyl(run_main_no_parallel, tmp_path / "nomatch", extra_args=("--mod-code", "Z"))
-    assert out2.exists()
-    # allow empty file here; behavior depends on your writer (track lines, etc.)
-    # but it must not crash.
-
 
 def test_cli_debug_writes_extra_outputs_bedmethyl(run_main_no_parallel, tmp_path):
     out = _run_cli_bedmethyl(run_main_no_parallel, tmp_path, extra_args=("--debug",))

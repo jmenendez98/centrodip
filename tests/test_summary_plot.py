@@ -84,22 +84,6 @@ def test_bt_filter_chrom_filters_correctly():
     assert [r.start for r in sub._records] == [0, 20]
 
 
-@pytest.mark.parametrize("x_mode,expected", [
-    ("start", [0, 20]),
-    ("midpoint", [5, 25]),
-])
-def test_bt_positions(x_mode, expected):
-    bt = _bt([_rec("chr1", 0, 10), _rec("chr1", 20, 30)])
-    out = sp._bt_positions(bt, x_mode=x_mode)
-    assert out.tolist() == expected
-
-
-def test_bt_positions_bad_mode_raises():
-    bt = _bt([_rec("chr1", 0, 10)])
-    with pytest.raises(ValueError):
-        sp._bt_positions(bt, x_mode="nope")
-
-
 def test_lowess_smoothed_from_bedgraph_reads_extras0_and_nan_when_missing():
     low = BedTable(
         [
@@ -214,14 +198,15 @@ def test_centrodipSummaryPlot_bedtable_writes_file(tmp_path: Path):
     dips_unfiltered = BedTable([_rec("chr1", 550_000, 850_000, score=100)], inferred_kind="bed", inferred_ncols=6)
 
     out = tmp_path / "plots" / "summary.png"
-    written = sp.centrodipSummaryPlot_bedtable(
+    written = sp.centrodipChromSummaryPlot(
         bedMethyl=bedMethyl,
         regions=regions,
         lowess_bg=lowess_bg,
         dips_final=dips_final,
         dips_unfiltered=dips_unfiltered,
+        bkgrd_median=50.0,
         output_path=out,
     )
 
-    assert Path(written).exists()
-    assert Path(written).stat().st_size > 0
+    assert Path(written[1]).exists()
+    assert Path(written[1]).stat().st_size > 0

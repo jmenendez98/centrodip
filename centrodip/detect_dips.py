@@ -192,6 +192,8 @@ def find_edges(
         return [], []
     if len(positions) != n:
         raise ValueError("smoothed and positions must have the same length")
+    if not np.isfinite(background_median):
+        raise ValueError("background_median must be finite")
 
     k_consecutive = 5
 
