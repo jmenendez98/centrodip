@@ -7,11 +7,14 @@ from centrodip.bedtable import BedTable
 
 
 def filterDips(
+    chrom: str,
     dips: BedTable,
     regions: BedTable,
+    *,
     min_size: int,
     min_score: float,
     cluster_distance: int,
+    debug: bool = False,
 ) -> BedTable:
 
     # region span filter - keep only dips that are entirely within a single region
@@ -40,15 +43,24 @@ def filterDips(
     # convert back to BedTable
     size_filtered = BedTable([r for r in dips._records if r.length >= min_size], inferred_kind="bed", inferred_ncols=6)
 
+    if debug:
+        print(f"[DEBUG] {chrom}: {len(dips._records) - len(size_filtered._records)} dips removed from size filtering [min_size={min_size}].")
+
     # score filter - remove dip regions with score less than min_score
     # convert back to BedTable
     score_filtered = BedTable([r for r in size_filtered._records if (r.score is not None and int(r.score) >= min_score)], inferred_kind="bed", inferred_ncols=6)
+
+    if debug:
+        print(f"[DEBUG] {chrom}: {len(size_filtered._records) - len(score_filtered._records)} dips removed from score filtering [min_score={min_score}].")
 
     # cluster filter - keep only dips in the largest cluster within cluster_distance
     cluster_filtered = clusterFilter(
         score_filtered,
         cluster_distance
     )
+
+    if debug:
+        print(f"[DEBUG] {chrom}: {len(score_filtered._records) - len(cluster_filtered._records)} dips removed from cluster filtering [cluster_distance={cluster_distance}].")
 
     return cluster_filtered
 
